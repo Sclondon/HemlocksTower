@@ -145,6 +145,13 @@ func _build_view() -> void:
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+	# Crows' speech bubbles, drawn crisp at full resolution under the rest of the UI
+	var bubbles := Control.new()
+	bubbles.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bubbles.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(bubbles)
+	SpeechBubble.overlay = bubbles
+	SpeechBubble.view_scale = PIXEL_SCALE
 	touch = TouchControls.new()
 	touch.process_mode = Node.PROCESS_MODE_PAUSABLE
 	layer.add_child(touch)

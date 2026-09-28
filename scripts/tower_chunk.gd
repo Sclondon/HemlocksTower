@@ -784,7 +784,7 @@ static func make_ground() -> Node3D:
 	# Hemlocks: kept outside the camera's orbit so they never block the view
 	for i in 110:
 		var a := rng.randf() * TAU
-		var r := 36.0 + pow(rng.randf(), 1.6) * 190.0   # clear of the camera, even with the bird far out
+		var r := 50.0 + pow(rng.randf(), 1.6) * 180.0   # clear of the hub and the camera, even with the bird at its edge
 		var base := Vector3(sin(a) * r, 0.0, cos(a) * r)
 		var h := rng.randf_range(5.0, 11.0)
 		var col := Color(0.12, 0.3, 0.22).lightened(rng.randf_range(0.0, 0.15))
@@ -808,7 +808,7 @@ static func make_ground() -> Node3D:
 	# Gnarled dead trees among the hemlocks
 	for i in 9:
 		var a := rng.randf() * TAU
-		var r := rng.randf_range(24.0, 34.0)
+		var r := rng.randf_range(46.0, 54.0)
 		var base := Vector3(sin(a) * r, 0.0, cos(a) * r)
 		var top := base + Vector3(rng.randf_range(-0.6, 0.6), rng.randf_range(4.0, 6.0), rng.randf_range(-0.6, 0.6))
 		var bark := Color(0.22, 0.2, 0.2)
@@ -900,6 +900,12 @@ func _tick_wire(w: Dictionary, delta: float) -> void:
 		_draw_wire(w)
 		for b in w.perched:
 			b.position = wire_point(w, b.get_meta("t"))
+	# A crow on a low wire right up against the lens just fills the screen: hide it
+	var vp := get_viewport()
+	var cam := vp.get_camera_3d() if vp else null
+	if cam:
+		for b: Node3D in w.perched:
+			b.visible = b.global_position.distance_to(cam.global_position) > 5.0
 	for i in range(w.flying.size() - 1, -1, -1):
 		var b: AnimatedSprite3D = w.flying[i]
 		var v: Vector3 = b.get_meta("v")
@@ -1029,9 +1035,18 @@ func _build_wire(w: Dictionary) -> void:
 	var st := MeshUtil.begin()
 	var a: Vector3 = w.a
 	var b: Vector3 = w.b
-	# An iron hook on the wall, and a post on the platform
-	MeshUtil.box(st, a, Vector3(0.18, 0.18, 0.3), atan2(a.x, a.z), Color(0.25, 0.24, 0.27))
-	MeshUtil.beam(st, b - Vector3(0, 1.45, 0), b + Vector3(0, 0.12, 0), 0.14, WOOD)
+	if w.get("poles", false):
+		# Telegraph poles from the ground, each with a crossbar and a glass insulator
+		for end: Vector3 in [a, b]:
+			var foot := Vector3(end.x, 0.0, end.z)
+			var across := Vector3(end.z, 0, -end.x).normalized()
+			MeshUtil.beam(st, foot, end + Vector3(0, 0.5, 0), 0.2, WOOD.darkened(0.15))
+			MeshUtil.beam(st, end + Vector3(0, 0.15, 0) - across * 0.7, end + Vector3(0, 0.15, 0) + across * 0.7, 0.12, WOOD)
+			MeshUtil.box(st, end + Vector3(0, 0.05, 0), Vector3(0.14, 0.18, 0.14), 0.0, Color(0.45, 0.7, 0.65))
+	else:
+		# An iron hook on the wall, and a post on the platform
+		MeshUtil.box(st, a, Vector3(0.18, 0.18, 0.3), atan2(a.x, a.z), Color(0.25, 0.24, 0.27))
+		MeshUtil.beam(st, b - Vector3(0, 1.45, 0), b + Vector3(0, 0.12, 0), 0.14, WOOD)
 	add_child(MeshUtil.commit(st, MeshUtil.flat_material(Color.WHITE)))
 	_draw_wire(w)
 	var rng := RandomNumberGenerator.new()

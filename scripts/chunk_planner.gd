@@ -573,6 +573,8 @@ static func _plan_drafts(rng: RandomNumberGenerator, k: int, band: int, base: fl
 # bottom of the bounce for a big launch. Crows like to sit on them.
 static func _plan_wires(rng: RandomNumberGenerator, k: int, surfaces: Array[Dictionary]) -> Array[Dictionary]:
 	var wires: Array[Dictionary] = []
+	if k == 0:
+		return _hub_wires(rng)
 	if k < START_CHUNKS:
 		return wires
 	for s in surfaces:
@@ -590,6 +592,41 @@ static func _plan_wires(rng: RandomNumberGenerator, k: int, surfaces: Array[Dict
 			"surface": s.id,
 		})
 	return wires
+
+# The hub's telegraph line: poles in a ring round the meadow, wires slung
+# between them, crows lined up along most of it. One span is missing, where a
+# pole came down.
+const HUB_POLES := 9
+const HUB_POLE_R := 23.0
+const HUB_POLE_TOP := 5.4
+
+static func _hub_wires(rng: RandomNumberGenerator) -> Array[Dictionary]:
+	var wires: Array[Dictionary] = []
+	for i in HUB_POLES - 1:
+		var a0 := 0.35 + TAU * i / HUB_POLES
+		var a1 := 0.35 + TAU * (i + 1) / HUB_POLES
+		wires.append({
+			"id": "0:w%d" % i,
+			"a": Vector3(sin(a0) * HUB_POLE_R, HUB_POLE_TOP, cos(a0) * HUB_POLE_R),
+			"b": Vector3(sin(a1) * HUB_POLE_R, HUB_POLE_TOP, cos(a1) * HUB_POLE_R),
+			"sag": rng.randf_range(0.6, 0.9),
+			"birds": rng.randi_range(3, 7) if rng.randf() < 0.8 else 0,
+			"poles": true,
+		})
+	return wires
+
+# Where the hub's talking crows sit (angle round the tower, distance from its
+# axis) and what each of them says
+const HUB_CROWS := [
+	[Vector2(1.3, 9.5), "Everyone starts down here. Most of them end down here too."],
+	[Vector2(2.4, 15.0), "The wires hum at night. Land on them anyway. It's fun."],
+	[Vector2(3.3, 11.0), "I used to climb. Now I just watch the ones who do."],
+	[Vector2(4.1, 20.0), "Those stones were a tower once. A short one."],
+	[Vector2(4.9, 13.0), "Don't go past the hemlocks. Nothing comes back from past the hemlocks."],
+	[Vector2(5.6, 18.5), "The mushrooms glow when somebody falls. Look. They're glowing."],
+	[Vector2(0.9, 25.0), "Every morning there's one more crow on the wire. Count them."],
+	[Vector2(3.9, 6.5), "Out of breath? You can always hop. Hopping is free."],
+]
 
 # Chains of boost rings out in open air, curving round and up from a route
 # ledge: glide through them for a lift
@@ -617,6 +654,18 @@ static func _plan_npcs(rng: RandomNumberGenerator, k: int, surfaces: Array[Dicti
 	if k == 0:
 		var a := 0.42
 		npcs.append({"id": "0:n0", "kind": "crow_grey", "theta": a, "r": TowerShape.wall_r(0, a, 1.2), "y": 0.0, "line": -1, "talks": true})
+		# The hub: crows loafing about the meadow, each with something to say,
+		# and a few more pecking about in the grass
+		var kinds := ["crow_grey", "crow_blue", "crow_brown"]
+		for i in HUB_CROWS.size():
+			var spot: Vector2 = HUB_CROWS[i][0]
+			npcs.append({"id": "0:h%d" % i, "kind": kinds[i % kinds.size()], "theta": spot.x, "r": spot.y, "y": 0.0,
+				"line": 0, "text": HUB_CROWS[i][1], "talks": true})
+		var hub_rng := _rng(0, 0, 9)
+		for i in 7:
+			var ha := hub_rng.randf() * TAU
+			npcs.append({"id": "0:g%d" % i, "kind": kinds[hub_rng.randi_range(0, 2)], "theta": ha,
+				"r": hub_rng.randf_range(8.0, Tuning.HUB_RADIUS - 3.0), "y": 0.0, "line": 0, "talks": false, "roam": 2.5})
 		return npcs
 	if rng.randf() > 0.35:
 		return npcs

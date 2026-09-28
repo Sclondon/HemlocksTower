@@ -54,11 +54,14 @@ var hop_timer := 0.0
 var hop_t := 1.0
 var hop_from := Vector3.ZERO
 var hop_to := Vector3.ZERO
+var roam := 0.0                      # hops about within this far of home (crows on the open ground)
+var home := Vector3.ZERO
 
 func setup(d: Dictionary, on: Dictionary) -> void:
 	data = d
 	surface = on
-	line = FIRST_LINE if d.line < 0 else LINES[d.line % LINES.size()]
+	line = d.get("text", FIRST_LINE if d.line < 0 else LINES[d.line % LINES.size()])
+	roam = d.get("roam", 0.0)
 	hop_timer = randf_range(1.0, 4.0)
 	name = "Npc_" + String(d.id).replace(":", "_")
 	var s := AnimatedSprite3D.new()
@@ -85,9 +88,11 @@ func tick(delta: float, player_pos: Vector3) -> void:
 	if cam == null:
 		return
 	var right := cam.global_transform.basis.x
+	# Out in the hub a crow can wander right in front of the lens: step out of shot
+	sprite.visible = global_position.distance_to(cam.global_position) > 5.0
 	if bubble:
 		bubble.tick(delta, global_position.distance_to(player_pos) < TALK_RANGE)
-	elif not surface.is_empty() and not surface.get("broken", false):
+	elif roam > 0.0 or (not surface.is_empty() and not surface.get("broken", false)):
 		_wander(delta, right)
 		if hop_t < 1.0:
 			return
@@ -105,7 +110,15 @@ func _wander(delta: float, right: Vector3) -> void:
 		return
 	hop_timer = randf_range(1.5, 4.5)
 	hop_from = position
-	hop_to = _spot_on(surface)
+	if home == Vector3.ZERO:
+		home = position
+	if roam > 0.0:
+		# Pecking about in the grass: short hops, never far from home
+		var target := home + Vector3(randf_range(-roam, roam), 0, randf_range(-roam, roam))
+		hop_to = position + (target - position).limit_length(0.9)
+		hop_timer = randf_range(0.4, 2.2)
+	else:
+		hop_to = _spot_on(surface)
 	hop_t = 0.0
 	(sprite as SpriteBase3D).flip_h = (hop_to - hop_from).dot(right) > 0.0
 

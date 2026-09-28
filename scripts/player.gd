@@ -60,6 +60,7 @@ var ghost: AnimatedSprite3D           # silhouette shown only where the bird is 
 var feathers: CPUParticles3D           # black feathers shed while flapping / gliding
 var trails: WingTrails                 # wing-tip lines while gliding fast
 var flap_hold := 0.0                   # keeps the flap animation going briefly
+var hop_phase := 0.0                   # walking is a run of little hops: how far through them
 
 const FLAP_UNTIL_FALLING := -9.0       # flap animation until falling faster than this
 const GHOST_COLOR := Color(0.6, 0.5, 0.95, 0.5)
@@ -164,7 +165,16 @@ func _physics_process(delta: float) -> void:
 	knock = knock.move_toward(Vector2.ZERO, 12.0 * delta)
 	var r_min := TowerShape.wall_r(shape, theta, Tuning.WALL_MARGIN)
 	var r_max := TowerShape.wall_r(shape, theta, Tuning.OUTER_REACH)
-	r = clamp(r, r_min, max(r_max, r_min))
+	if y < Tuning.HUB_TOP:
+		r_max = max(r_max, Tuning.HUB_RADIUS)      # the meadow round the base: the hub
+	r = max(r, r_min)
+	if r > r_max:
+		if y < Tuning.HUB_TOP + TowerShape.CHUNK_H:
+			# Flown up out of the hub from far out: drift back in rather than snap
+			r = move_toward(r, r_max, Tuning.RADIAL_SPEED * 2.0 * delta) if r - r_max > 0.3 else r_max
+			vr = min(vr, 0.0)
+		else:
+			r = r_max
 
 	# On a tightrope: slide along it, bounce with it, launch off it
 	if not wire.is_empty():
@@ -174,13 +184,14 @@ func _physics_process(delta: float) -> void:
 		_collect(delta)
 		return
 
-	# Jumping: the ground jump costs a little stamina, each air flap more
+	# Jumping: the ground jump costs a little stamina (but you can always jump
+	# off the ground, even with an empty bar), each air flap more
 	if jump_pressed:
 		jump_buffer = Tuning.JUMP_BUFFER
 	if jump_buffer > 0.0:
-		if (grounded or coyote > 0.0) and stamina >= Tuning.JUMP_COST - 0.001:
+		if grounded or coyote > 0.0:
 			vy = Tuning.JUMP_SPEED * _spring()
-			stamina -= Tuning.JUMP_COST
+			stamina = max(stamina - Tuning.JUMP_COST, 0.0)
 			_leave_ground()
 			jumped.emit()
 			_puff()
@@ -376,7 +387,7 @@ func _process(delta: float) -> void:
 		nudge = cam.global_position - global_position
 		nudge.y = 0.0
 		nudge = nudge.normalized() * 0.35
-	sprite.position = nudge
+	sprite.position = nudge + Vector3(0, _hop(delta), 0)
 
 	var derived := _derive(frames, GHOST_COLOR, 0)
 	if ghost.sprite_frames != derived:
@@ -385,7 +396,7 @@ func _process(delta: float) -> void:
 	ghost.offset = sprite.offset
 	ghost.flip_h = sprite.flip_h
 	ghost.scale = sprite.scale
-	ghost.position = nudge
+	ghost.position = sprite.position
 	# Only show the silhouette when something really is in the way (it used to
 	# sit under the bird all the time, which some phones drew as a second bird)
 	if not is_npc and cam and tower:
@@ -416,6 +427,24 @@ func _process(delta: float) -> void:
 		shadow.global_position = Vector3(sin(theta) * r, floor_y + 0.03, cos(theta) * r)
 		var s: float = clamp(1.0 - (y - floor_y) / 16.0, 0.55, 1.0)
 		shadow.scale = Vector3.ONE * s
+
+# Crows don't walk, they hop: while moving on the ground the sprite bounces
+# along in little hops (just the picture: the bird's feet stay on the ledge).
+# Stopping finishes the hop in the air. Returns the lift for this frame.
+func _hop(delta: float) -> float:
+	var walking := grounded and wire.is_empty() and Vector2(vt, vr).length() > 0.6
+	if not grounded or not wire.is_empty():
+		hop_phase = 0.0
+		return 0.0
+	if walking or hop_phase > 0.0:
+		var before := floorf(hop_phase)
+		hop_phase += delta * Tuning.HOP_RATE * clamp(Vector2(vt, vr).length() / Tuning.RUN_SPEED, 0.7, 1.3)
+		if floorf(hop_phase) > before:
+			if walking:
+				squash = max(squash, 0.22)        # a little bump on each touchdown
+			else:
+				hop_phase = 0.0                   # stopped: settle on this landing
+	return sin(fposmod(hop_phase, 1.0) * PI) * Tuning.HOP_HEIGHT
 
 # A flat-colour copy of an animation (for the see-through silhouette),
 # optionally grown by `grow` pixels all round. Cached: the bird's three
@@ -488,9 +517,11 @@ func _make_feathers() -> CPUParticles3D:
 	p.spread = 180.0
 	p.initial_velocity_min = 0.4
 	p.initial_velocity_max = 1.4
-	p.gravity = Vector3(0, -1.2, 0)
-	p.damping_min = 1.0
-	p.damping_max = 2.0
+	# Gravity must beat the damping, or a feather that has slowed to a stop just
+	# hangs in the air (it looked like one stuck under the bird after a landing)
+	p.gravity = Vector3(0, -2.6, 0)
+	p.damping_min = 0.4
+	p.damping_max = 0.9
 	p.angle_min = -180.0
 	p.angle_max = 180.0
 	p.angular_velocity_min = -200.0

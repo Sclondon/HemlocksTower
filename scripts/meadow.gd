@@ -94,7 +94,7 @@ func _ready() -> void:
 
 func _place_eyes(pair: Node3D, rng: RandomNumberGenerator) -> void:
 	var a := rng.randf() * TAU
-	var r := rng.randf_range(34.0, 46.0)
+	var r := rng.randf_range(50.0, 62.0)
 	pair.position = Vector3(sin(a) * r, rng.randf_range(0.8, 3.0), cos(a) * r)
 	pair.set_meta("blink", rng.randf_range(1.0, 5.0))
 

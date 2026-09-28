@@ -109,3 +109,10 @@ const RING_STAMINA := 15.0
 const POWER_TIME := {"sunseed": 10.0, "spring": 12.0, "cloud": 12.0, "charm": 15.0}
 const SPRING_MULT := 1.4             # jump / flap speed with a Spring Berry
 const CLOUD_GRAVITY := 0.45          # falling gravity with a Cloud Puff
+
+# The meadow round the tower's foot is the hub: down there the bird can wander
+# much further out than the climb allows
+const HUB_TOP := 10.0                # below this height...
+const HUB_RADIUS := 30.0             # ...the bird can go this far from the tower's axis
+const HOP_RATE := 5.0                # hops a second while walking
+const HOP_HEIGHT := 0.32             # metres
