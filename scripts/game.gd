@@ -501,45 +501,38 @@ func _take_shots() -> void:
 		print("saved ", path)
 	get_tree().quit()
 
-# Attract-mode montage for the arcade cabinet's preview video: a title card,
-# then the AI flying the bird through a few highlights. Record it with
-#   godot --path . --write-movie out.avi --fixed-fps 30 --resolution 720x1280 -- --record
+# Attract mode for the arcade cabinet's preview video: the camera follows one
+# of the climbing birds (the rival AI flying the player's bird) up the tower,
+# cutting up through the levels: the meadow, the Misty Spires, the
+# Stormcrown, Above the Clouds and the Aurora Vault. Record it landscape
+# (Movie Maker uses the project's window size, so override it) with
+#   override.cfg: [display] window/size/viewport_width=1280, viewport_height=720
+#   godot --path . --write-movie out.avi --fixed-fps 30 -- --record
 func _record_attract() -> void:
 	var fps := 30
 	var run := 4242
-	# Title card over the slowly orbiting tower (from the far side, away from
-	# the chatty crow at the door)
-	_load_world(run, PI, TowerShape.apothem(0) + 1.5, 0.0, 0.0)
-	hud.visible = false
-	var box := title_panel.get_child(0).get_child(0)
-	for i in box.get_child_count():
-		box.get_child(i).visible = i < 2          # just the name and tagline
-	title_panel.visible = true
-	camera.orbit_idle = true
-	player.active = false
-	await _frames(int(1.8 * fps))
-
-	# Highlights: the start (and its crow), the first turret on the route,
-	# a thunderstorm, and the aurora
-	# (each clip is [seed, route surface to start from, seconds]; seed 99 has a
-	# turret on the route early on)
-	var clips: Array = [
-		[run, _route_spot(run, 0, -1), 3.4],
-		[99, _route_spot(99, 6, ChunkPlanner.Kind.TURRET, true), 3.4],
-		[run, _route_spot(run, 3 * TowerShape.CHUNKS_PER_BAND + 1, -1), 3.6],
-		[run, _route_spot(run, 6 * TowerShape.CHUNKS_PER_BAND + 2, -1), 3.2],
-	]
+	var climber := player as ClimberBird
+	climber.speed_mult = 1.35
+	climber.patience_max = 0.1
+	climber.regen_rate = 200.0
+	touch.visible = false
+	# [band, seconds]; the first clip runs a second long, for the video's trim
+	var clips: Array = [[0, 4.2], [1, 3.2], [3, 3.2], [5, 3.2], [6, 3.2]]
 	for clip in clips:
-		var s: Dictionary = clip[1]
-		var a: float = (s.a0 + s.a1) * 0.5 if s.kind != ChunkPlanner.Kind.GROUND else 0.0
-		var r: float = TowerShape.wall_r(s.k, a, min(1.0, s.d1 * 0.5)) if s.kind != ChunkPlanner.Kind.GROUND else TowerShape.apothem(0) + 1.5
-		_load_world(clip[0], a, r, s.top, s.top, Tuning.STAMINA_CAP)
+		var band: int = clip[0]
+		if band == 0:
+			_load_world(run, 0.0, TowerShape.apothem(0) + 1.5, 0.0, 0.0, Tuning.STAMINA_CAP)
+		else:
+			var s := _route_spot(run, band * TowerShape.CHUNKS_PER_BAND + 1, -1)
+			var a: float = (s.a0 + s.a1) * 0.5
+			_load_world(run, a, TowerShape.wall_r(s.k, a, min(1.0, s.d1 * 0.5)), s.top, s.top, Tuning.STAMINA_CAP)
 		_play()
-		if TowerShape.band_at(s.top) == 3:
+		rivals.spawn_timer = 0.3
+		if band == 3:
 			# Make sure the storm shows off: lightning (and a flock) straight away
 			weather.lightning_timer = 0.6
 			flocks.spawn(camera, player.y)
-		await _frames(int(clip[2] * fps))
+		await _frames(int(clip[1] * fps))
 	get_tree().quit()
 
 func _frames(n: int) -> void:
