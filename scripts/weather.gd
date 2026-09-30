@@ -70,7 +70,7 @@ var env: Environment
 var sky_mat: ShaderMaterial
 var sun: DirectionalLight3D
 var emitters := {}
-var wind_fx: CPUParticles3D           # streaks showing which way the wind blows
+var gusts: WindGusts                 # ribbons showing which way the wind blows
 var current: Dictionary = {}          # the composed result (glow, lightning, ...)
 var band := -1
 var wind := 0.0                      # tangential m/s, sampled by the player
@@ -78,7 +78,7 @@ var cloud_tint := Color.WHITE
 var flash := 0.0
 var time := 0.0
 var lightning_timer := 5.0
-var day_time := 0.42                 # 0..1 round the clock; starts late in the evening
+var day_time := 0.985                # 0..1 round the clock (sunrise at 0); starts at dawn
 var dayness := 1.0                   # 1 = broad day, 0 = deep night
 var was_night := false
 
@@ -88,12 +88,13 @@ var state_from: Dictionary = STATES.sunny
 var state_to: Dictionary = STATES.sunny
 var state_blend := 1.0
 var state_timer := 0.0
+var locked := ""                     # when set, the only weather there is (the boss fight's storm)
 
 static func weather_of(b: int) -> Dictionary:
-	return TYPES[b % TYPES.size()]
+	return TYPES[TowerShape.style(b) % TYPES.size()]
 
 static func band_name(b: int) -> String:
-	var cycle := b / TYPES.size()
+	var cycle := b / (TowerShape.style_count if TowerShape.style_count > 0 else TYPES.size())
 	var numerals := ["", " II", " III", " IV", " V", " VI", " VII", " VIII", " IX", " X"]
 	return weather_of(b).name + (numerals[cycle] if cycle < numerals.size() else " %d" % (cycle + 1))
 
@@ -126,6 +127,11 @@ func _ready() -> void:
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 	env.fog_enabled = true
 	env.fog_sky_affect = 0.25
+	# Depth fog: clear round the camera, thickening past a start distance.
+	# (Exponential fog put a milky film on everything a few metres away.)
+	env.fog_mode = Environment.FOG_MODE_DEPTH
+	env.fog_density = 0.95
+	env.fog_depth_curve = 1.4
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
@@ -135,30 +141,13 @@ func _ready() -> void:
 	sun.shadow_enabled = false       # the blob shadow does the job, and it's cheap on phones
 	add_child(sun)
 
-	emitters.rain = _emitter(Tuning.particles(500), 0.9, Vector3(0.025, 0.55, 1), Color(0.7, 0.8, 1.0, 0.55), Vector3(9, 0.5, 9), 20.0, 5.0, true)
-	emitters.snow = _emitter(Tuning.particles(260), 7.0, Vector3(0.09, 0.09, 1), Color(1, 1, 1, 0.9), Vector3(10, 0.5, 10), 1.2, 35.0, false)
+	emitters.rain = _emitter(Tuning.particles(1300), 1.5, Vector3(0.025, 0.55, 1), Color(0.7, 0.8, 1.0, 0.55), Vector3(24, 0.5, 24), 20.0, 5.0, true)
+	emitters.snow = _emitter(Tuning.particles(700), 9.0, Vector3(0.09, 0.09, 1), Color(1, 1, 1, 0.9), Vector3(24, 0.5, 24), 1.2, 35.0, false)
 	emitters.mist = _emitter(Tuning.particles(36), 7.0, Vector3(3.0, 1.6, 1), Color(1, 1, 1, 0.13), Vector3(9, 6, 9), 0.25, 180.0, false)
 	emitters.sparkle = _emitter(Tuning.particles(70), 3.0, Vector3(0.07, 0.07, 1), Color(0.6, 1.0, 0.8, 1.0), Vector3(9, 6, 9), 0.3, 180.0, false)
 
-	wind_fx = CPUParticles3D.new()
-	wind_fx.amount = Tuning.particles(40)
-	wind_fx.lifetime = 0.9
-	wind_fx.local_coords = false
-	wind_fx.emitting = false
-	wind_fx.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
-	wind_fx.emission_box_extents = Vector3(6, 5, 6)
-	wind_fx.spread = 4.0
-	wind_fx.gravity = Vector3.ZERO
-	wind_fx.set_particle_flag(CPUParticles3D.PARTICLE_FLAG_ALIGN_Y_TO_VELOCITY, true)
-	var streak := BoxMesh.new()
-	streak.size = Vector3(0.035, 1.1, 0.035)
-	var sm := StandardMaterial3D.new()
-	sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	sm.albedo_color = Color(1, 1, 1, 0.35)
-	streak.material = sm
-	wind_fx.mesh = streak
-	add_child(wind_fx)
+	gusts = WindGusts.new()
+	add_child(gusts)
 
 func _emitter(amount: int, life: float, quad_size: Vector3, color: Color, extents: Vector3, speed: float, spread: float, stretch: bool) -> CPUParticles3D:
 	var p := CPUParticles3D.new()
@@ -189,7 +178,7 @@ func _emitter(amount: int, life: float, quad_size: Vector3, color: Color, extent
 
 # Start again from a fresh evening (a new climb)
 func reset_clock() -> void:
-	day_time = 0.42
+	day_time = 0.985
 	state_name = ""
 	state_timer = 0.0
 
@@ -206,6 +195,8 @@ func _next_state(b: int) -> void:
 		if roll <= 0:
 			pick = n
 			break
+	if locked != "":
+		pick = locked
 	state_timer = randf_range(25.0, 60.0)
 	if pick == state_name:
 		return
@@ -285,7 +276,10 @@ func update(delta: float, focus: Vector3, theta: float) -> void:
 	if deck_band >= 1:
 		near_deck = 1.0 - clamp(abs(focus.y - CloudLayers.deck_height(deck_band)) / 10.0, 0.0, 1.0)
 	env.fog_light_color = horizon.lerp(grey, 0.4).lerp(Color(0.8, 0.82, 1.0), flash * 0.75)
-	env.fog_density = look.fog + st.fog * mult + near_deck * 0.04
+	# How thick the weather is sets how close the fog starts
+	var thick: float = look.fog + st.fog * mult + near_deck * 0.012
+	env.fog_depth_end = clamp(2.2 / max(thick, 0.0001), 45.0, 900.0)
+	env.fog_depth_begin = env.fog_depth_end * 0.35
 	env.ambient_light_color = NIGHT_AMBIENT.lerp(DAY_AMBIENT, dayness) * lerp(1.0, 0.85, c)
 
 	# Lightning
@@ -326,17 +320,8 @@ func update(delta: float, focus: Vector3, theta: float) -> void:
 	wind = st.wind * mult * gust * dir
 	var tangent := Vector3(cos(theta), 0, -sin(theta)) * wind
 
-	# Wind streaks sweep past the bird in the direction it will be pushed
-	var windy: bool = abs(wind) > 0.4
-	if wind_fx.emitting != windy:
-		wind_fx.emitting = windy
-	if windy:
-		var dir_w: Vector3 = Vector3(cos(theta), 0, -sin(theta)) * sign(wind)
-		wind_fx.global_position = focus + Vector3(0, 1.5, 0) - dir_w * 5.0
-		wind_fx.direction = dir_w
-		wind_fx.initial_velocity_min = 8.0 + abs(wind) * 2.0
-		wind_fx.initial_velocity_max = 11.0 + abs(wind) * 2.5
-		(wind_fx.mesh.material as StandardMaterial3D).albedo_color.a = clamp(abs(wind) / 4.0, 0.15, 0.5)
+	# Ribbons of wind flow past the bird the way it will be pushed
+	gusts.update(delta, wind, focus, theta)
 
 	for key in emitters:
 		var em: CPUParticles3D = emitters[key]
@@ -344,7 +329,7 @@ func update(delta: float, focus: Vector3, theta: float) -> void:
 		if em.emitting != on:
 			em.emitting = on
 		if on:
-			em.global_position = focus + (Vector3(0, 9, 0) if key == "rain" or key == "snow" else Vector3(0, 1, 0))
+			em.global_position = focus + (Vector3(0, 15, 0) if key == "rain" or key == "snow" else Vector3(0, 1, 0))
 			em.gravity = tangent * (3.0 if key == "rain" else 1.0)
 
 var _sky_cache := {}

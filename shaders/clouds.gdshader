@@ -21,13 +21,18 @@ void vertex() {
 	world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
-void fragment() {
-	vec2 uv = world.xz / scale + wind * TIME + vec2(offset);
+// How thick the cloud is at a point on the plane (0 or less: clear sky)
+float density(vec2 at, vec2 cam) {
+	vec2 uv = at / scale + wind * TIME + vec2(offset);
 	float n = texture(noise_tex, uv).r * 0.65 + texture(noise_tex, uv * 2.3 + 0.37).r * 0.35;
-	float edge = 1.0 - smoothstep(fade_near, fade_far, length(world.xz - CAMERA_POSITION_WORLD.xz));
-	float v = (n - (1.0 - coverage)) * 3.0 * edge;
+	float edge = 1.0 - smoothstep(fade_near, fade_far, length(at - cam));
+	return (n - (1.0 - coverage)) * 3.0 * edge;
+}
+
+void fragment() {
+	float v = density(world.xz, CAMERA_POSITION_WORLD.xz);
 	if (v <= 0.0) discard;
-	float a = v > 0.66 ? 0.95 : (v > 0.33 ? 0.75 : 0.4);
+	float a = v > 0.66 ? 0.8 : (v > 0.33 ? 0.55 : 0.28);
 	ALBEDO = (v > 0.66 ? color.rgb : mix(shade.rgb, color.rgb, 0.45)) * tint.rgb;
 	ALPHA = a * color.a;
 }

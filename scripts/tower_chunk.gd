@@ -29,7 +29,7 @@ var glass: Array[ShaderMaterial] = []
 var drafts: Array[Dictionary] = []
 var npcs: Array[Npc] = []
 var wires: Array[Dictionary] = []
-var rings: Array[Dictionary] = []
+var streams: Array[Dictionary] = []    # wind streams (see ChunkPlanner._plan_streams)
 var speakers: Array = []               # crows' speech bubbles (ticked here)
 var built := false
 
@@ -60,11 +60,13 @@ func setup(p: Dictionary, collected: Dictionary) -> void:
 		d.perched = []                   # crows sitting on it
 		d.flying = []                    # crows that took off
 		wires.append(d)
-	for rg in p.rings:
-		var d: Dictionary = rg.duplicate()
-		d.cool = 0.0
-		d.node = null
-		rings.append(d)
+	for sm in p.streams:
+		var d: Dictionary = sm.duplicate()
+		d.line = stream_line(sm.pts)
+		d.cool = 0.0                     # seconds before it can catch the bird again
+		d.ribbons = null
+		d.hoops = []
+		streams.append(d)
 	name = "Chunk%d" % p.k
 
 # --- collision queries -------------------------------------------------------
@@ -132,8 +134,9 @@ func tick(time: float, delta: float) -> void:
 	for sp in speakers:
 		if is_instance_valid(sp):
 			sp.tick(delta, false)
-	for rg in rings:
-		rg.cool = max(rg.cool - delta, 0.0)
+	for sm in streams:
+		sm.cool = max(sm.cool - delta, 0.0)
+		_tick_stream(sm, time)
 	for pk in pickups:
 		if pk.taken >= 0.0 and pk.type != "feather":
 			pk.taken += delta
@@ -265,10 +268,12 @@ func build() -> void:
 		_build_npc(n)
 	for w in wires:
 		_build_wire(w)
-	for rg in rings:
-		_build_ring(rg)
+	for sm in streams:
+		_build_stream(sm)
 
 func _build_walls(shape: int, base: float, tint: Color) -> void:
+	if plan.get("summit", false):
+		return                       # the Summit crown stands here instead
 	var st := MeshUtil.begin()
 	var n := TowerShape.sides(shape)
 	var half := TowerShape.face_step(shape) * 0.5
@@ -596,17 +601,8 @@ static func _texture_for(type: String) -> Texture2D:
 	if _pickup_tex.has(type):
 		return _pickup_tex[type]
 	var tex: Texture2D
-	if type == "seed":
-		tex = MeshUtil.pixel_texture([
-			"..oo..",
-			".obbo.",
-			"obwbbo",
-			"obwbbo",
-			"obwbbo",
-			"obbbbo",
-			".obbo.",
-			"..oo..",
-		], {"o": Color(0.3, 0.18, 0.08), "b": Color(0.85, 0.68, 0.4), "w": Color(1.0, 0.95, 0.8)})
+	if type == "plume":
+		tex = Feathers.pale_texture()
 	elif type == "poison":
 		tex = MeshUtil.pixel_texture([
 			"..oooo..",
@@ -775,24 +771,47 @@ static func make_ground() -> Node3D:
 		var a := TAU * i / 16.0
 		# Far bigger than you can see: fog swallows the edge, so there's no disc
 		disk.append(TowerShape.polar_point(a, 1500.0))
-	MeshUtil.extrude(st, disk, -3.0, 0.0, Color(0.36, 0.55, 0.3), 8.0)
+	# The grass: its own mesh, with a very subtle pixel texture (see _grass)
+	var turf := MeshUtil.begin()
+	MeshUtil.extrude(turf, disk, -3.0, 0.0, Color.WHITE, 4.0)
+	var gm := StandardMaterial3D.new()
+	gm.albedo_texture = _grass()
+	gm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	gm.vertex_color_use_as_albedo = true
+	gm.roughness = 1.0
+	gm.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	var grass := MeshUtil.commit(turf, gm)
 	# A cobbled apron around the tower's foot
 	for half_ring in [[0.0, PI], [PI, TAU]]:
 		MeshUtil.extrude(st, TowerShape.strip_polygon(0, half_ring[0], half_ring[1], -0.1, 2.6), -0.2, 0.02, Color(0.6, 0.58, 0.55))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
-	# Hemlocks: kept outside the camera's orbit so they never block the view
-	for i in 110:
+	# The wood round the hub, out to the horizon, in one smooth spread: over
+	# the ground its density eases off gradually from a thick edge (no step
+	# anywhere), and the far trees grow a little taller, so the canopy closes
+	# up toward the horizon by itself. Fewer on phones. (The pictures and
+	# shades are for the flat-sprite forest, PAPER_FOREST off.)
+	# [position, height, texture, shade]
+	var yard := HubStations.DREAM.x
+	var trees: Array = []
+	while trees.size() < Tuning.particles(900):
 		var a := rng.randf() * TAU
-		var r := 50.0 + pow(rng.randf(), 1.6) * 180.0   # clear of the hub and the camera, even with the bird at its edge
-		var base := Vector3(sin(a) * r, 0.0, cos(a) * r)
-		var h := rng.randf_range(5.0, 11.0)
-		var col := Color(0.12, 0.3, 0.22).lightened(rng.randf_range(0.0, 0.15))
-		MeshUtil.box(st, base + Vector3(0, 0.6, 0), Vector3(0.5, 1.2, 0.5), a, Color(0.35, 0.22, 0.15))
-		MeshUtil.cone(st, base + Vector3(0, 1.0, 0), h * 0.3, h * 0.55, 6, col)
-		MeshUtil.cone(st, base + Vector3(0, 1.0 + h * 0.35, 0), h * 0.22, h * 0.5, 6, col.lightened(0.06))
+		var r: float = sqrt(lerp(44.0 * 44.0, 340.0 * 340.0, rng.randf()))     # even over the ground...
+		if rng.randf() > (1.0 + 1.5 * exp(-(r - 44.0) / 45.0)) / 2.5:
+			continue                                # ...then thicker toward the edge, easing off
+		var near := r < 70.0
+		var tex: Texture2D = DEAD_TREES[rng.randi_range(0, 2)] if near and rng.randf() < 0.75 else TREES[rng.randi_range(0, TREES.size() - 1)]
+		var h: float = rng.randf_range(14.0, 22.0) * lerp(1.0, 1.35, clamp((r - 150.0) / 190.0, 0.0, 1.0))
+		trees.append([Vector3(sin(a) * r, 0.0, cos(a) * r), h, tex, rng.randf_range(0.62, 0.88)])
+	# ...and a thick band hugging the wood's edge by the meadow, fading off
+	# smoothly outward (a half-bell curve, so there's no step where it ends)
+	for i in 240:
+		var a := rng.randf() * TAU
+		var r: float = 44.0 + abs(rng.randfn(0.0, 22.0))
+		var tex: Texture2D = DEAD_TREES[rng.randi_range(0, 2)] if rng.randf() < 0.75 else TREES[rng.randi_range(0, TREES.size() - 1)]
+		trees.append([Vector3(sin(a) * r, 0.0, cos(a) * r), rng.randf_range(14.0, 22.0), tex, rng.randf_range(0.62, 0.88)])
 	# Boulders near the tower
-	for i in 10:
+	for i in 5:
 		var a := rng.randf() * TAU
 		var r := rng.randf_range(14.0, 20.0)
 		MeshUtil.box(st, Vector3(sin(a) * r, 0.2, cos(a) * r), Vector3(1, 0.7, 0.8) * rng.randf_range(0.6, 1.3), rng.randf() * TAU, Color(0.5, 0.5, 0.52))
@@ -805,20 +824,8 @@ static func make_ground() -> Node3D:
 		var h := rng.randf_range(0.9, 1.8)
 		MeshUtil.box(st, Vector3(sin(a) * r, h * 0.5, cos(a) * r), Vector3(0.7, h, 0.4), a + rng.randf_range(-0.2, 0.2), Color(0.45, 0.46, 0.5))
 	MeshUtil.box(st, Vector3(sin(1.6) * 10.3, 0.2, cos(1.6) * 10.3), Vector3(1.6, 0.4, 0.7), 1.1, Color(0.42, 0.43, 0.47))
-	# Gnarled dead trees among the hemlocks
-	for i in 9:
-		var a := rng.randf() * TAU
-		var r := rng.randf_range(46.0, 54.0)
-		var base := Vector3(sin(a) * r, 0.0, cos(a) * r)
-		var top := base + Vector3(rng.randf_range(-0.6, 0.6), rng.randf_range(4.0, 6.0), rng.randf_range(-0.6, 0.6))
-		var bark := Color(0.22, 0.2, 0.2)
-		MeshUtil.beam(st, base, top, 0.35, bark)
-		for j in 4:
-			var from := base.lerp(top, rng.randf_range(0.45, 0.95))
-			var dir := Vector3(rng.randf_range(-1, 1), rng.randf_range(0.2, 0.9), rng.randf_range(-1, 1)).normalized()
-			MeshUtil.beam(st, from, from + dir * rng.randf_range(1.2, 2.4), 0.14, bark)
 	# Wildflowers in clumps, a few of them blood red
-	for clump in 40:
+	for clump in 16:
 		var a := rng.randf() * TAU
 		var r := rng.randf_range(4.5, 30.0)
 		var centre := Vector3(sin(a) * r, 0.0, cos(a) * r)
@@ -829,9 +836,10 @@ static func make_ground() -> Node3D:
 			MeshUtil.box(st, p + Vector3(0, 0.27, 0), Vector3(0.14, 0.08, 0.14), rng.randf() * TAU, col)
 	var ground := Node3D.new()
 	ground.add_child(MeshUtil.commit(st, MeshUtil.flat_material(Color.WHITE)))
+	ground.add_child(grass)
 	# Fairy rings of pale mushrooms that glow faintly (unshaded, so they show at night)
 	var glow := MeshUtil.begin()
-	for ring in 2:
+	for ring in 1:
 		var a := rng.randf() * TAU
 		var c := Vector3(sin(a), 0, cos(a)) * rng.randf_range(12.0, 20.0)
 		var rr := rng.randf_range(1.6, 2.4)
@@ -845,7 +853,264 @@ static func make_ground() -> Node3D:
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.vertex_color_use_as_albedo = true
 	ground.add_child(MeshUtil.commit(glow, m))
+	_add_forest(ground, trees)
+	_add_mountains(ground, rng)
+	_add_props(ground, rng, yard)
 	return ground
+
+const FOREST_SHADER := preload("res://shaders/forest.gdshader")
+const MOUNTAIN_SHADER := preload("res://shaders/mountains.gdshader")
+# The forest: 3D Paper-Mario-style trees with Paradise Island leaves (see
+# PaperTrees), or false for the flat 8 Bit Evil Returns tree sprites
+const PAPER_FOREST := true
+static var forest_materials: Array[ShaderMaterial] = []   # the meadow dims them at night
+static var night_sprites: Array[Sprite3D] = []   # pixel-art props, dimmed together at night (the meadow does it)
+
+# The meadow's grass texture: the base green with a light scatter of
+# blades and specks a shade or two either side of it (a 32 px tile, laid 4 m
+# wide), just enough to read as pixel-art grass
+static func _grass() -> ImageTexture:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 31
+	var base := Color(0.36, 0.55, 0.3)
+	var img := Image.create(32, 32, false, Image.FORMAT_RGBA8)
+	img.fill(base)
+	for i in 70:
+		var x := rng.randi_range(0, 31)
+		var y := rng.randi_range(0, 31)
+		var c := base.lightened(0.07) if rng.randf() < 0.55 else base.darkened(0.07)
+		img.set_pixel(x, y, c)
+		if rng.randf() < 0.6:
+			img.set_pixel(x, posmod(y - 1, 32), c)        # a blade, two pixels tall
+	return ImageTexture.create_from_image(img)
+
+# The trees, one MultiMesh per picture (a single draw call each, however
+# many trees). The owls blink, so they're sprites of their own.
+# trees: [position, height, texture, shade]
+static func _add_forest(ground: Node3D, trees: Array) -> void:
+	var by_tex := {}
+	var paper := []
+	for t in trees:
+		if t[2] == OWL_TREE:
+			var owl := _prop(t[0], t[1], t[2], 5, 0.0)
+			owl.modulate = Color(t[3], t[3] * 0.92, t[3] * 1.08)
+			owl.set_meta("tint", owl.modulate)
+			ground.add_child(owl)
+		elif PAPER_FOREST:
+			paper.append([t[0], t[1] * 0.8])
+		else:
+			if not by_tex.has(t[2]):
+				by_tex[t[2]] = []
+			by_tex[t[2]].append(t)
+	for tex: Texture2D in by_tex:
+		var list: Array = by_tex[tex]
+		var h := float(tex.get_height())
+		var quad := QuadMesh.new()
+		quad.size = Vector2.ONE
+		# Its foot (the lowest opaque pixel, a touch sunk) sits at the origin
+		quad.center_offset = Vector3(0, 0.5 - (_empty_rows_below(tex, 1) + 2) / h, 0)
+		var mat := ShaderMaterial.new()
+		mat.shader = FOREST_SHADER
+		mat.set_shader_parameter("tex", tex)
+		forest_materials.append(mat)
+		quad.material = mat
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = quad
+		mm.instance_count = list.size()
+		var aspect := tex.get_width() / h
+		for i in list.size():
+			var t: Array = list[i]
+			mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3(t[1] * aspect, t[1], 1.0)), t[0]))
+			mm.set_instance_color(i, Color(t[3], t[3] * 0.92, t[3] * 1.08))    # dark, a little bruised
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# Instances turn to face the camera, so give it room not to be culled
+		mmi.custom_aabb = AABB(Vector3(-400, -10, -400), Vector3(800, 60, 800))
+		ground.add_child(mmi)
+	if not paper.is_empty():
+		PaperTrees.add(ground, paper, forest_materials)
+
+# Two rings of snow-capped mountains on the horizon, hazed toward the fog
+# colour by their own shader (the engine fog would swallow them): the far
+# ring paler, and all of them fading out in thick weather.
+static func _add_mountains(ground: Node3D, rng: RandomNumberGenerator) -> void:
+	var st := MeshUtil.begin()
+	for layer in 2:
+		var far := layer == 1
+		var ring := 900.0 if far else 620.0
+		var rock := Color(0.52, 0.55, 0.68) if far else Color(0.34, 0.33, 0.44)
+		var count := 26 if far else 34
+		for i in count:
+			var a := TAU * (i + rng.randf_range(-0.35, 0.35)) / count + layer * 0.4
+			var r := ring + rng.randf_range(-60.0, 60.0)
+			var height := rng.randf_range(160.0, 330.0) if far else rng.randf_range(90.0, 210.0)
+			var radius := height * rng.randf_range(0.9, 1.4)
+			var base := Vector3(sin(a) * r, -2.0, cos(a) * r)
+			MeshUtil.cone(st, base, radius, height, 7, rock.darkened(rng.randf_range(0.0, 0.12)))
+			# A shoulder beside each peak breaks up the silhouette
+			var side := Vector3(cos(a), 0, -sin(a)) * radius * rng.randf_range(-0.7, 0.7)
+			MeshUtil.cone(st, base + side, radius * 0.7, height * rng.randf_range(0.45, 0.7), 6, rock.darkened(0.08))
+			if height > (220.0 if far else 150.0):
+				# Snow on the upper third
+				var snow := Color(0.92, 0.93, 1.0) if far else Color(0.82, 0.83, 0.92)
+				MeshUtil.cone(st, base + Vector3(0, height * 0.64, 0), radius * 0.37, height * 0.37, 7, snow)
+	var m := ShaderMaterial.new()
+	m.shader = MOUNTAIN_SHADER
+	forest_materials.append(m)          # (so the game feeds it the fog colour and night light)
+	var mi := MeshUtil.commit(st, m)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ground.add_child(mi)
+
+# Pixel art from 8 Bit Evil Returns
+const DEAD_TREES := [preload("res://images/trees/tree.png"), preload("res://images/trees/tree_5.png"), preload("res://images/trees/tree_6.png")]
+const TREES := [preload("res://images/trees/tree_2.png"), preload("res://images/trees/tree_3.png"), preload("res://images/trees/tree_4.png"),
+	preload("res://images/trees/tree.png"), preload("res://images/trees/tree_5.png"), preload("res://images/trees/tree_6.png")]
+const OWL_TREE := preload("res://images/trees/tree_owl.png")      # 5 frames: the owl blinks
+const GRAVES := [preload("res://images/ambient/grave_1_small.png"), preload("res://images/ambient/grave_2.png")]
+const LAMP := preload("res://images/ambient/street_lamp.png")      # 4 frames: flickers
+const SCARECROW := preload("res://images/ambient/scarecrow.png")   # 6 frames: sways
+const PUMPKIN := preload("res://images/ambient/pumpkin.png")       # 6 frames: its candle gutters
+const SKULL := preload("res://images/ambient/skull.png")
+
+# The meadow's set dressing, outside the stone circle. Tall things stay near
+# the hub's edge or beyond, so they rarely come between the camera and bird.
+static func _add_props(ground: Node3D, rng: RandomNumberGenerator, yard: float) -> void:
+	# A little graveyard behind the cauldrons
+	for i in 6:
+		var a := yard + (1.0 if i % 2 == 0 else -1.0) * rng.randf_range(0.13, 0.4)
+		var r := rng.randf_range(18.5, 26.0)
+		var lean := Vector3(rng.randf_range(-0.12, 0.12), a + rng.randf_range(-0.25, 0.25), rng.randf_range(-0.1, 0.1))
+		ground.add_child(_grave(Vector3(sin(a) * r, 0, cos(a) * r), rng.randf_range(1.6, 2.2), GRAVES[i % 2], lean))
+	# Street lamps ringing the hub, flickering
+	for i in 5:
+		var a := TAU * i / 5.0 + 0.45
+		ground.add_child(_prop(Vector3(sin(a), 0, cos(a)) * 32.0, 4.2, LAMP, 4, 6.0 + rng.randf() * 3.0))
+		var glow := Sprite3D.new()
+		glow.texture = MeshUtil.blob_texture(16, Color(1.0, 0.8, 0.45))
+		glow.pixel_size = 0.12
+		glow.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		glow.shaded = false
+		glow.modulate = Color(1, 1, 1, 0.5)
+		glow.position = Vector3(sin(a), 0, cos(a)) * 32.0 + Vector3(0, 3.7, 0)
+		ground.add_child(glow)
+	# A scarecrow keeping watch over the meadow
+	var sa := yard + PI * 0.7
+	ground.add_child(_prop(Vector3(sin(sa), 0, cos(sa)) * 25.0, 3.0, SCARECROW, 6, 5.0))
+	# Pumpkin patches, and a few skulls in the grass
+	for patch in 2:
+		var a := rng.randf() * TAU
+		var c := Vector3(sin(a), 0, cos(a)) * rng.randf_range(15.0, 28.0)
+		for i in 3:
+			var p := c + Vector3(rng.randf_range(-2.0, 2.0), 0, rng.randf_range(-2.0, 2.0))
+			ground.add_child(_prop(p, 0.8, PUMPKIN, 6, rng.randf_range(4.0, 7.0), false))
+	for i in 3:
+		var a := rng.randf() * TAU
+		var r := rng.randf_range(13.0, 30.0)
+		ground.add_child(_prop(Vector3(sin(a) * r, 0, cos(a) * r), 0.45, SKULL))
+
+# A gravestone from its pixel art, made solid: the picture stacked in cut-out
+# layers a few pixels deep (lit on the faces, darker between), so it has the
+# art's exact outline from the front and real thickness from the side.
+# `turn` is its (x, y, z) rotation: facing out, leaning a little.
+static func _grave(base: Vector3, height: float, tex: Texture2D, turn: Vector3) -> MeshInstance3D:
+	var px := height / tex.get_height()
+	var w := tex.get_width() * px
+	var y0 := -(_empty_rows_below(tex, 1) + 1) * px
+	var y1 := y0 + height
+	var layers := 6
+	var depth := px * 5.0
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in layers:
+		var z: float = lerp(-depth * 0.5, depth * 0.5, float(i) / (layers - 1))
+		var face := i == 0 or i == layers - 1
+		st.set_color(Color.WHITE if face else Color(0.6, 0.6, 0.65))
+		st.set_normal(Vector3(0, 0, 1.0 if i == layers - 1 else -1.0))
+		for v in [[-0.5, 0.0, 0.0, 1.0], [0.5, 0.0, 1.0, 1.0], [0.5, 1.0, 1.0, 0.0], [-0.5, 0.0, 0.0, 1.0], [0.5, 1.0, 1.0, 0.0], [-0.5, 1.0, 0.0, 0.0]]:
+			st.set_uv(Vector2(v[2], v[3]))
+			st.add_vertex(Vector3(v[0] * w, lerp(y0, y1, v[1]), z))
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = tex
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.vertex_color_use_as_albedo = true
+	m.roughness = 1.0
+	m.metallic_specular = 0.0
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = base
+	mi.rotation = turn
+	return mi
+
+static var _foot_rows := {}
+
+# Transparent rows under the art in the first frame of `tex`
+static func _empty_rows_below(tex: Texture2D, frames: int) -> int:
+	if _foot_rows.has(tex):
+		return _foot_rows[tex]
+	var img := tex.get_image()
+	var rows := 0
+	if img:
+		if img.is_compressed():
+			img.decompress()
+		var w := img.get_width() / frames
+		rows = img.get_height()
+		for y in range(img.get_height() - 1, -1, -1):
+			var solid := false
+			for x in w:
+				if img.get_pixel(x, y).a > 0.5:
+					solid = true
+					break
+			if solid:
+				rows = img.get_height() - 1 - y
+				break
+	_foot_rows[tex] = rows
+	return rows
+
+# A pixel-art sprite standing on the ground at `base`, `height` metres tall,
+# turning to face the camera. With `frames` > 1 it animates at `fps`
+# (0 = sit on frame 0 and play the rest now and then, like a blink).
+# `dims`: darkens at night (false for things that glow).
+static func _prop(base: Vector3, height: float, tex: Texture2D, frames := 1, fps := -1.0, dims := true) -> Sprite3D:
+	var s := Sprite3D.new()
+	s.texture = tex
+	s.hframes = frames
+	var h := tex.get_height()
+	s.pixel_size = height / h
+	# Plant its lowest opaque pixel a little into the ground (the art has
+	# empty rows under the trunk, which would leave it floating)
+	s.offset = Vector2(0, h * 0.5 - _empty_rows_below(tex, frames) - 2)
+	s.position = base
+	s.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	s.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	s.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	# Unshaded like the crows: lit, the flat sprites came out pale next to them.
+	# Night dims them instead (unless they glow, like the pumpkins).
+	s.shaded = false
+	if dims:
+		s.set_meta("tint", Color.WHITE)
+		night_sprites.append(s)
+	s.double_sided = true
+	if frames > 1 and fps >= 0.0:
+		s.frame = randi() % frames
+		s.tree_entered.connect(func():
+			var anim := s.create_tween().set_loops()
+			if fps == 0.0:
+				anim.tween_interval(randf_range(2.5, 5.0))
+				for f in range(1, frames + 1):
+					anim.tween_property(s, "frame", f % frames, 0.0)
+					anim.tween_interval(0.08)
+			else:
+				for f in frames:
+					anim.tween_property(s, "frame", (f + 1) % frames, 0.0)
+					anim.tween_interval(1.0 / fps), CONNECT_ONE_SHOT)
+	return s
 
 # --- retracting ledges ----------------------------------------------------------
 
@@ -956,6 +1221,7 @@ const WIRE_LINES := {
 # to the nearest ledge. Usually one of them says something about it.
 func scare_wire(w: Dictionary) -> void:
 	var spoke := false
+	var shed := false
 	for b: AnimatedSprite3D in w.perched.duplicate():
 		var roll := randf()
 		var mood := "fly" if roll < 0.4 else ("fall" if roll < 0.6 else ("stay" if roll < 0.85 else "land"))
@@ -980,6 +1246,9 @@ func scare_wire(w: Dictionary) -> void:
 			b.sprite_frames = Npc.recoloured(Player.FALL_FRAMES, b.get_meta("tint"))
 			b.set_meta("v", Vector3(0, -1.0, 0) + away * 0.5)
 		else:
+			if not shed and Feathers.the and randf() < 0.4:
+				shed = true      # startled crows lose a feather
+				Feathers.the.shed(b.global_position + Vector3(0, 0.5, 0))
 			b.sprite_frames = Npc.recoloured(Player.FLAP_FRAMES, b.get_meta("tint"))
 			b.set_meta("v", away * randf_range(2.0, 5.0) + Vector3(randf_range(-2, 2), randf_range(4.0, 7.0), randf_range(-2, 2)))
 		b.offset = Vector2(0, b.sprite_frames.get_frame_texture("default", 0).get_height() * 0.5)
@@ -1071,40 +1340,145 @@ func _build_wire(w: Dictionary) -> void:
 		add_child(bird)
 		w.perched.append(bird)
 
-# --- boost rings -----------------------------------------------------------------
+# --- wind streams -----------------------------------------------------------------
 
-func _build_ring(rg: Dictionary) -> void:
-	var torus := TorusMesh.new()
-	torus.inner_radius = 0.95
-	torus.outer_radius = 1.2
-	torus.rings = 16
-	torus.ring_segments = 5
+const STREAM_HOOP_EVERY := 7          # sampled points between wind hoops (3.5 m)
+const STREAM_RIBBONS := 7
+const WIND_WHITE := Color(0.92, 0.98, 1.0)
+
+# A current's curve through its points (Catmull-Rom), resampled every
+# STREAM_STEP metres so riding it is an even speed
+static func stream_line(pts: Array) -> PackedVector3Array:
+	var dense := PackedVector3Array()
+	for i in pts.size() - 1:
+		var p0: Vector3 = pts[max(i - 1, 0)]
+		var p1: Vector3 = pts[i]
+		var p2: Vector3 = pts[i + 1]
+		var p3: Vector3 = pts[min(i + 2, pts.size() - 1)]
+		var n := maxi(2, int(p1.distance_to(p2) / 0.1))
+		for j in n:
+			var t := float(j) / n
+			dense.append(0.5 * ((2.0 * p1) + (p2 - p0) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+				+ (3.0 * p1 - p0 - 3.0 * p2 + p3) * t * t * t))
+	dense.append(pts[-1])
+	var out := PackedVector3Array([dense[0]])
+	var carry := 0.0
+	for i in range(1, dense.size()):
+		var a := dense[i - 1]
+		var b := dense[i]
+		var seg := a.distance_to(b)
+		var d := Tuning.STREAM_STEP - carry
+		while d <= seg:
+			out.append(a.lerp(b, d / seg))
+			d += Tuning.STREAM_STEP
+		carry = seg - (d - Tuning.STREAM_STEP)
+	return out
+
+# The point `f` samples along a current (f can fall between samples)
+static func stream_point(line: PackedVector3Array, f: float) -> Vector3:
+	var i := clampi(int(f), 0, line.size() - 2)
+	return line[i].lerp(line[i + 1], clamp(f - i, 0.0, 1.0))
+
+static func stream_tangent(line: PackedVector3Array, f: float) -> Vector3:
+	var i := clampi(int(f), 1, line.size() - 2)
+	return (line[i + 1] - line[i - 1]).normalized()
+
+# Two directions square to the current at a point, for things to circle it
+static func _stream_frame(t: Vector3) -> Array[Vector3]:
+	var side := t.cross(Vector3.UP)
+	side = Vector3.RIGHT if side.length() < 0.01 else side.normalized()
+	return [side, side.cross(t)]
+
+# Hoops of wind along the current, as big as the space that catches you,
+# and a bundle of ribbons spiralling along it (both animated in _tick_stream)
+func _build_stream(sm: Dictionary) -> void:
+	var line: PackedVector3Array = sm.line
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.albedo_color = Color(0.55, 1.0, 0.95)
-	torus.material = m
-	var mi := MeshInstance3D.new()
-	mi.mesh = torus
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	# The ring's hole faces along the way round the tower, so you glide through
-	var theta: float = rg.theta
-	var along := Vector3(cos(theta), 0, -sin(theta))
-	mi.basis = Basis(Vector3.UP.cross(along).normalized(), along, Vector3.UP.cross(along).normalized().cross(along))
-	mi.position = Vector3(sin(theta) * rg.r, rg.y, cos(theta) * rg.r)
-	add_child(mi)
-	rg.node = mi
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_color = Color(WIND_WHITE, 0.45)
+	for i in range(3, line.size() - 3, STREAM_HOOP_EVERY):
+		var torus := TorusMesh.new()
+		torus.inner_radius = Tuning.STREAM_CATCH - 0.12
+		torus.outer_radius = Tuning.STREAM_CATCH
+		torus.rings = 20
+		torus.ring_segments = 3
+		torus.material = m
+		var mi := MeshInstance3D.new()
+		mi.mesh = torus
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var t := stream_tangent(line, i)
+		var f := _stream_frame(t)
+		mi.basis = Basis(f[0], t, f[0].cross(t))    # the hole faces along the flow
+		mi.position = line[i]
+		add_child(mi)
+		sm.hoops.append(mi)
+	var rib := MeshInstance3D.new()
+	rib.mesh = ImmediateMesh.new()
+	rib.top_level = true
+	rib.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var rm := StandardMaterial3D.new()
+	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rm.vertex_color_use_as_albedo = true
+	rm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	rib.material_override = rm
+	add_child(rib)
+	sm.ribbons = rib
 
-# Returns the ring the bird just flew through (or {}), and gives it a pulse
-func ring_hit(pos: Vector3) -> Dictionary:
-	for rg in rings:
-		if rg.cool > 0.0 or rg.node == null:
+func _tick_stream(sm: Dictionary, time: float) -> void:
+	# The hoops swell one after another down the flow, showing which way it goes
+	for i in sm.hoops.size():
+		var s := 1.0 + 0.14 * sin(time * 6.0 - i * 1.1)
+		sm.hoops[i].scale = Vector3(s, 1.0, s)
+	if sm.ribbons == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	var im: ImmediateMesh = sm.ribbons.mesh
+	im.clear_surfaces()
+	if cam == null or global_position.y != 0.0:
+		return                           # (not while the tower's growing)
+	var line: PackedVector3Array = sm.line
+	var n := line.size()
+	var run := float(n + 20)
+	for k in STREAM_RIBBONS:
+		var head := fposmod(time * Tuning.STREAM_SPEED / Tuning.STREAM_STEP * 1.2 + k * run / STREAM_RIBBONS, run)
+		var pts: Array[Vector3] = []
+		var fade: Array[float] = []
+		for j in 16:
+			var f := head - j * 0.9
+			if f < 0.0 or f > n - 1:
+				continue
+			var p := stream_point(line, f)
+			var fr := _stream_frame(stream_tangent(line, f))
+			var spin := f * 0.22 + k * TAU / STREAM_RIBBONS
+			var wobble := 0.7 + 0.45 * sin(f * 0.13 + k)
+			pts.append(p + (fr[0] * cos(spin) + fr[1] * sin(spin)) * wobble)
+			fade.append(sin(PI * j / 15.0) * min(f / 6.0, 1.0) * min((n - 1 - f) / 6.0, 1.0))
+		if pts.size() < 3:
 			continue
-		if rg.node.position.distance_to(pos + Vector3(0, 0.6, 0)) < 1.25:
-			rg.cool = 1.5
-			var t := create_tween()
-			t.tween_property(rg.node, "scale", Vector3.ONE * 1.5, 0.12)
-			t.tween_property(rg.node, "scale", Vector3.ONE, 0.3)
-			return rg
+		im.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
+		for j in pts.size():
+			var along := (pts[max(j - 1, 0)] - pts[min(j + 1, pts.size() - 1)]).normalized()
+			var side := along.cross(cam.global_position - pts[j]).normalized() * 0.045
+			var c := Color(WIND_WHITE, 0.8 * fade[j])
+			im.surface_set_color(c)
+			im.surface_add_vertex(pts[j] + side)
+			im.surface_set_color(c)
+			im.surface_add_vertex(pts[j] - side)
+		im.surface_end()
+
+# A current close enough to catch the bird at `pos`: {stream, i} or {}
+func stream_near(pos: Vector3) -> Dictionary:
+	var reach := Tuning.STREAM_CATCH * Tuning.STREAM_CATCH
+	for sm in streams:
+		if sm.cool > 0.0:
+			continue
+		var line: PackedVector3Array = sm.line
+		for i in range(0, line.size() - 6):
+			if line[i].distance_squared_to(pos) < reach:
+				return {"stream": sm, "i": float(i)}
 	return {}
 
 # Where a falling bird crossed a wire this frame (or {}): {wire, t}

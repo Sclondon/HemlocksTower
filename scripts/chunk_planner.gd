@@ -485,7 +485,7 @@ static func plan(run_seed: int, k: int) -> Dictionary:
 			path.append(s)
 	for i in range(1, path.size()):
 		if rng.randf() < 0.3:
-			pickups.append(_pickup_over(k, "seed", pickups.size(), path[i], 1.1))
+			pickups.append(_pickup_over(k, "plume", pickups.size(), path[i], 1.1))
 	if band > 0:
 		for i in path.size() - 1:
 			var a: Dictionary = path[i]
@@ -510,7 +510,7 @@ static func plan(run_seed: int, k: int) -> Dictionary:
 			else:
 				for j in 3:
 					var t := j / 2.0
-					pickups.append({"id": "%d:p%d" % [k, pickups.size()], "type": "seed", "theta": a,
+					pickups.append({"id": "%d:p%d" % [k, pickups.size()], "type": "plume", "theta": a,
 						"r": TowerShape.wall_r(k, a, lerp(3.2, FAR_OUT.y, t)), "y": s.top + 1.0 + t * 1.6})
 
 	# Power-ups: at the end of a catwalk, or out in open air now and then
@@ -533,7 +533,7 @@ static func plan(run_seed: int, k: int) -> Dictionary:
 		"drafts": _plan_drafts(rng, k, band, base, path),
 		"npcs": _plan_npcs(rng, k, surfaces),
 		"wires": _plan_wires(rng, k, surfaces),
-		"rings": _plan_rings(rng, k, path),
+		"streams": _plan_streams(rng, k, path),
 	}
 
 # Columns of rising or sinking air. Updrafts sit beside the route as a
@@ -630,22 +630,32 @@ const HUB_CROWS := [
 
 # Chains of boost rings out in open air, curving round and up from a route
 # ledge: glide through them for a lift
-static func _plan_rings(rng: RandomNumberGenerator, k: int, path: Array[Dictionary]) -> Array[Dictionary]:
-	var rings: Array[Dictionary] = []
-	if k < START_CHUNKS or rng.randf() > 0.45 or path.size() < 2:
-		return rings
-	var s: Dictionary = path[rng.randi_range(1, path.size() - 1)]
+# Wind streams: a current of strong wind along a curve round the tower,
+# starting just off a route ledge. Jump into it and it carries you along
+# like a slide. Most climb, some sweep level, a few swoop down. They're
+# extras: the route never needs one.
+static func _plan_streams(rng: RandomNumberGenerator, k: int, path: Array[Dictionary]) -> Array[Dictionary]:
+	var streams: Array[Dictionary] = []
+	if k < START_CHUNKS or rng.randf() > 0.5 or path.size() < 2:
+		return streams
+	var s: Dictionary = path[rng.randi_range(0, path.size() - 2)]
 	var dir := 1.0 if rng.randf() < 0.5 else -1.0
+	var roll := rng.randf()
+	var steps := rng.randi_range(5, 8)
+	var climb := rng.randf_range(2.0, 3.2) if roll < 0.65 else (rng.randf_range(-0.3, 0.3) if roll < 0.85 else -rng.randf_range(1.2, 1.8))
 	var a: float = (s.a0 + s.a1) * 0.5
-	var out := rng.randf_range(4.0, 6.0)
-	var y: float = s.top + 1.5
-	for i in rng.randi_range(3, 5):
-		var r := TowerShape.wall_r(k, a, out)
-		rings.append({"id": "%d:r%d" % [k, i], "theta": a, "r": r, "y": y, "dir": dir})
-		a += dir * 3.2 / r
-		out = min(out + rng.randf_range(0.5, 1.5), FAR_OUT.y)
-		y += rng.randf_range(0.3, 1.2)
-	return rings
+	var out := rng.randf_range(2.8, 4.5)
+	# (a falling one starts high, so it ends about where it began)
+	var y: float = s.top + 1.4 + (-climb * (steps - 1) if climb < 0.0 else 0.0)
+	var pts: Array[Vector3] = []
+	for i in steps:
+		var r := TowerShape.wall_r(TowerShape.chunk_at(y), a, out)
+		pts.append(Vector3(sin(a) * r, y, cos(a) * r))
+		a += dir * 5.0 / r               # about 5 m round the tower each step
+		out = clamp(out + rng.randf_range(-1.2, 1.2), 2.5, 7.0)
+		y += climb + rng.randf_range(-0.4, 0.4)
+	streams.append({"id": "%d:s0" % k, "pts": pts, "dir": dir})
+	return streams
 
 # Crows sitting on ledges, some with something odd to say. The first one is
 # always the crow by the door.

@@ -25,7 +25,7 @@ func _snap(name: String) -> void:
 
 func _run() -> void:
 	await _frames(10)
-	game._new_climb()
+	game._start_section(0)
 	game.weather.day_time = 0.3
 	var p: Player = game.player
 	await _frames(30)

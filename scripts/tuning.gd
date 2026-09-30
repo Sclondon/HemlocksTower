@@ -31,9 +31,9 @@ const UPDRAFT := 55.0
 const DOWNDRAFT := 30.0
 const DRAFT_MAX_RISE := 10.0         # updrafts lift you to at most this speed
 
-# Seeds top stamina up (without growing the bucket); poison drains it and
+# Loose plumes top stamina up (without growing the bucket); poison drains it and
 # stops it recovering for a moment
-const SEED_STAMINA := 40.0
+const PLUME_STAMINA := 40.0
 const POISON_DRAIN := 50.0
 const POISON_SICK := 2.5             # seconds without regen after eating poison
 
@@ -98,12 +98,14 @@ static var low_quality := false
 static func particles(n: int) -> int:
 	return maxi(1, int(n * (0.4 if low_quality else 1.0)))
 
-# Tightropes and boost rings
+# Tightropes and wind streams
 const WIRE_LAUNCH := 3.5             # extra jump speed off a wire (and it's free)
 const WIRE_DIP_BOOST := 11.0         # more still, per metre the wire is bent down
-const RING_LIFT := 10.0              # upward speed a boost ring gives
-const RING_PUSH := 6.0               # and a shove along the way you're going
-const RING_STAMINA := 15.0
+# Wind streams: currents along a curve that catch the bird and carry it
+const STREAM_SPEED := 13.0           # m/s along the current
+const STREAM_CATCH := 2.0            # how close to the current's middle catches you
+const STREAM_STEP := 0.5             # metres between the sampled points of a current
+const STREAM_STAMINA := 20.0         # a breather: stamina back when it lets you go
 
 # Power-ups: how long each lasts (seconds)
 const POWER_TIME := {"sunseed": 10.0, "spring": 12.0, "cloud": 12.0, "charm": 15.0}
@@ -116,3 +118,8 @@ const HUB_TOP := 10.0                # below this height...
 const HUB_RADIUS := 30.0             # ...the bird can go this far from the tower's axis
 const HOP_RATE := 5.0                # hops a second while walking
 const HOP_HEIGHT := 0.32             # metres
+
+# Endless mode: a single drop longer than this ends the run. Section mode:
+# falling this far below the section's start carries you back to it.
+const ENDLESS_FALL := 36.0
+const SECTION_FALL_OUT := 18.0

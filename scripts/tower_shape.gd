@@ -22,6 +22,13 @@ const BAND_TINT := [
 	Color(0.85, 0.75, 0.95), Color(0.95, 0.85, 0.8),
 ]
 
+# Endless mode only builds from the sections the player has unlocked: band b
+# then looks like section b % style_count (0 = every band is its own section)
+static var style_count := 0
+
+static func style(b: int) -> int:
+	return posmod(b, style_count) if style_count > 0 else b
+
 static func chunk_at(y: float) -> int:
 	return floori(max(y, 0.0) / CHUNK_H)
 
@@ -32,7 +39,7 @@ static func band_at(y: float) -> int:
 	return band_of_chunk(chunk_at(y))
 
 static func sides(k: int) -> int:
-	return BAND_SIDES[band_of_chunk(k) % BAND_SIDES.size()]
+	return BAND_SIDES[style(band_of_chunk(k)) % BAND_SIDES.size()]
 
 # The tower swells and narrows from chunk to chunk (the opening chunks and
 # each band's first chunk keep the band's standard size)
@@ -42,10 +49,10 @@ static func thickness(k: int) -> float:
 	return 1.0 + 0.16 * sin(k * 0.87 + band_of_chunk(k) * 1.7) + 0.07 * sin(k * 2.3)
 
 static func apothem(k: int) -> float:
-	return BAND_APOTHEM[band_of_chunk(k) % BAND_APOTHEM.size()] * thickness(k)
+	return BAND_APOTHEM[style(band_of_chunk(k)) % BAND_APOTHEM.size()] * thickness(k)
 
 static func tint(k: int) -> Color:
-	return BAND_TINT[band_of_chunk(k) % BAND_TINT.size()]
+	return BAND_TINT[style(band_of_chunk(k)) % BAND_TINT.size()]
 
 static func face_offset(k: int) -> float:
 	# Band 0 has a face centred on theta = 0, where the climb starts

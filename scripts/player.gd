@@ -53,11 +53,13 @@ var gliding := false
 var wire: Dictionary = {}               # the tightrope we're riding, if any
 var powers := {}                       # active power-ups: name -> seconds left
 var wire_chunk: TowerChunk
+var stream: Dictionary = {}             # the wind stream carrying us, if any
+var stream_f := 0.0                  # how far along it (in sampled points)
+var stream_off := Vector3.ZERO       # where we were caught, easing onto the current
 var sick := 0.0                      # poisoned: no stamina recovery for a moment
 
 var sprite: AnimatedSprite3D
 var ghost: AnimatedSprite3D           # silhouette shown only where the bird is hidden
-var feathers: CPUParticles3D           # black feathers shed while flapping / gliding
 var trails: WingTrails                 # wing-tip lines while gliding fast
 var flap_hold := 0.0                   # keeps the flap animation going briefly
 var hop_phase := 0.0                   # walking is a run of little hops: how far through them
@@ -98,8 +100,8 @@ func _ready() -> void:
 	# frame behind and show its wings beside the bird while flapping fast)
 	sprite.frame_changed.connect(func(): ghost.frame = sprite.frame)
 
-	feathers = _make_feathers()
-	add_child(feathers)
+	# Feathers shake loose as it flaps (see Feathers)
+	flapped.connect(func(): if Feathers.the: Feathers.the.on_flap(self))
 	trails = WingTrails.new()
 	add_child(trails)
 
@@ -116,6 +118,7 @@ func _ready() -> void:
 
 func place(t: float, radius: float, height: float) -> void:
 	wire = {}
+	stream = {}
 	powers.clear()
 	theta = t
 	r = radius
@@ -175,6 +178,12 @@ func _physics_process(delta: float) -> void:
 			vr = min(vr, 0.0)
 		else:
 			r = r_max
+
+	# In a wind stream: carried along it until it lets go (or you jump out)
+	if not stream.is_empty():
+		_ride_stream(delta, jump_pressed)
+		_collect(delta)
+		return
 
 	# On a tightrope: slide along it, bounce with it, launch off it
 	if not wire.is_empty():
@@ -253,9 +262,11 @@ func _physics_process(delta: float) -> void:
 		var prev_pos := world_position()
 		y += vy * delta
 		if not is_npc:
-			var rg := tower.ring_hit(world_position())
-			if not rg.is_empty():
-				_boost(rg)
+			var hit := tower.stream_near(world_position() + Vector3(0, 0.5, 0))
+			if not hit.is_empty():
+				_catch_stream(hit)
+				_collect(delta)
+				return
 		if vy <= 0.0:
 			var s := tower.find_landing(prev_y, y, theta, r)
 			if not s.is_empty():
@@ -283,8 +294,8 @@ func _collect(delta: float) -> void:
 			"feather":   # bigger bucket for good, plus a flap's worth
 				max_stamina = min(max_stamina + Tuning.FEATHER_BONUS, Tuning.STAMINA_CAP)
 				stamina = min(stamina + Tuning.FEATHER_REFILL, max_stamina)
-			"seed":      # just a top-up
-				stamina = min(stamina + Tuning.SEED_STAMINA, max_stamina)
+			"plume":     # a loose feather: just a top-up
+				stamina = min(stamina + Tuning.PLUME_STAMINA, max_stamina)
 			"poison":
 				stamina = max(stamina - Tuning.POISON_DRAIN, 0.0)
 				sick = Tuning.POISON_SICK
@@ -297,6 +308,8 @@ func _collect(delta: float) -> void:
 # Struck by lightning: stunned, blasted outward and up, and it stings
 func zap() -> void:
 	stun = 0.9
+	if Feathers.the:
+		Feathers.the.burst(world_position() + Vector3(0, 0.6, 0), 5)
 	knock.y += 8.0
 	vy = max(vy, 7.0)
 	_leave_ground()
@@ -343,6 +356,8 @@ func _land(s: Dictionary, emit: bool) -> void:
 		squash = clamp(fall / 6.0, 0.25, 1.0)
 		if fall > Tuning.STUN_FALL:
 			stun = Tuning.STUN_TIME
+			if Feathers.the:
+				Feathers.the.burst(world_position() + Vector3(0, 0.4, 0), 4)
 		landed.emit(fall)
 
 func _process(delta: float) -> void:
@@ -409,8 +424,6 @@ func _process(delta: float) -> void:
 		ghost.modulate.a = move_toward(ghost.modulate.a, want, delta * 4.0)
 		ghost.visible = ghost.modulate.a > 0.01
 
-	feathers.emitting = flapping
-	feathers.position = nudge + Vector3(0, 0.6, 0)
 	# Two clean lines off the wing tips, only while gliding at a good clip
 	var speed := Vector3(vt, vy, vr).length()
 	trails.active = gliding and speed > 5.0
@@ -491,45 +504,6 @@ static func _particle_quad(tex: Texture2D, size: float) -> QuadMesh:
 	q.material = m
 	return q
 
-# Little black feathers that tumble off and drift down while it flaps
-func _make_feathers() -> CPUParticles3D:
-	# A proper little feather, with a lighter quill so it shows on dark walls
-	var tex := MeshUtil.pixel_texture([
-		"....o",
-		"...oo",
-		"..ooq",
-		"..oqo",
-		".ooqo",
-		".oqoo",
-		"ooqo.",
-		"oqoo.",
-		"oqo..",
-		"qo...",
-	], {"o": Color(0.1, 0.07, 0.16), "q": Color(0.45, 0.4, 0.55)})
-	var p := CPUParticles3D.new()
-	p.local_coords = false
-	p.emitting = false
-	p.amount = Tuning.particles(12)
-	p.lifetime = 2.2
-	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	p.emission_sphere_radius = 0.35
-	p.direction = Vector3.UP
-	p.spread = 180.0
-	p.initial_velocity_min = 0.4
-	p.initial_velocity_max = 1.4
-	# Gravity must beat the damping, or a feather that has slowed to a stop just
-	# hangs in the air (it looked like one stuck under the bird after a landing)
-	p.gravity = Vector3(0, -2.6, 0)
-	p.damping_min = 0.4
-	p.damping_max = 0.9
-	p.angle_min = -180.0
-	p.angle_max = 180.0
-	p.angular_velocity_min = -200.0
-	p.angular_velocity_max = 200.0
-	p.color_ramp = _fade_ramp(1.0)
-	p.mesh = _particle_quad(tex, 0.5)
-	return p
-
 # A small puff of dust at the feet when leaving the ground
 func _puff() -> void:
 	if not is_inside_tree():
@@ -560,7 +534,7 @@ func _puff() -> void:
 	p.emitting = true
 	p.finished.connect(p.queue_free)
 
-# --- tightropes and rings ---------------------------------------------------------
+# --- tightropes and wind streams ---------------------------------------------------------
 
 # Falling onto a wire: grab it, push it down, scare off any crows sitting on it
 func _try_wire(prev_pos: Vector3) -> bool:
@@ -612,13 +586,48 @@ func _leave_wire() -> void:
 	grounded = false
 	fall_from = y
 
-# Flying through a boost ring: a lift, a shove the way you're going, a sip of
-# stamina
-func _boost(rg: Dictionary) -> void:
-	vy = max(vy, Tuning.RING_LIFT)
-	var dir: float = sign(vt) if abs(vt) > 0.5 else rg.dir
-	knock.x += dir * Tuning.RING_PUSH
-	stamina = min(stamina + Tuning.RING_STAMINA, max_stamina)
-	flap_anim = 0.3
-	fall_from = y
+# Caught by a wind stream: from here it carries us, easing from where we
+# were onto the middle of the current
+func _catch_stream(hit: Dictionary) -> void:
+	stream = hit.stream
+	stream_f = hit.i
+	stream_off = world_position() - TowerChunk.stream_point(stream.line, stream_f)
+	if not ground.is_empty():
+		_leave_ground()
+	grounded = false
+	gliding = false
+	vy = 0.0
+	squash = 0.5
 	boosted.emit()
+
+func _ride_stream(delta: float, jump: bool) -> void:
+	var line: PackedVector3Array = stream.line
+	stream_f += Tuning.STREAM_SPEED * delta / Tuning.STREAM_STEP
+	if stream_f >= line.size() - 1 or jump:
+		_leave_stream(jump)
+		return
+	stream_off = stream_off.move_toward(Vector3.ZERO, 5.0 * delta)
+	var p := TowerChunk.stream_point(line, stream_f) + stream_off
+	theta = atan2(p.x, p.z)
+	r = Vector2(p.x, p.z).length()
+	y = p.y
+	var t := TowerChunk.stream_tangent(line, stream_f)
+	var along := t.dot(Vector3(cos(theta), 0, -sin(theta)))
+	if abs(along) > 0.2:
+		facing = sign(along)
+	flap_anim = max(flap_anim, 0.15)
+	fall_from = y
+
+# Let go at the end (or jumped out): flung on along the current, with a
+# breather's worth of stamina back
+func _leave_stream(jumped_out: bool) -> void:
+	var t := TowerChunk.stream_tangent(stream.line, stream_f) * Tuning.STREAM_SPEED
+	stream.cool = 1.2
+	stream = {}
+	knock.x += t.dot(Vector3(cos(theta), 0, -sin(theta))) * 0.8
+	knock.y += t.dot(Vector3(sin(theta), 0, cos(theta))) * 0.5
+	vy = clamp(t.y, -6.0, 12.0) + (Tuning.JUMP_SPEED * 0.6 if jumped_out else 2.0)
+	stamina = min(stamina + Tuning.STREAM_STAMINA, max_stamina)
+	jump_buffer = 0.0
+	fall_from = y
+	squash = -0.5

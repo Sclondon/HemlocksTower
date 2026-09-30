@@ -13,6 +13,11 @@ var time := 0.0
 var glow := 1.0
 var collected := {}                  # gold feather ids taken this run
 var meadow: Meadow
+# Section mode: the tower stops at this chunk, which keeps only its ring
+# ledge (the summit); nothing exists above it. -1 = endless.
+var cap_chunk := -1
+# While the tower grows, chunks from this height up aren't built yet
+var reveal_top := INF
 
 func _ready() -> void:
 	add_child(TowerChunk.make_ground())
@@ -32,11 +37,39 @@ func chunk(k: int) -> TowerChunk:
 	# Planning is cheap and always synchronous; meshes can follow a frame later
 	if not chunks.has(k):
 		var c := TowerChunk.new()
-		c.setup(ChunkPlanner.plan(run_seed, k), collected)
+		c.setup(_plan(k), collected)
 		c.set_glow(glow)
 		add_child(c)
 		chunks[k] = c
 	return chunks[k]
+
+func _plan(k: int) -> Dictionary:
+	var p := ChunkPlanner.plan(run_seed, k)
+	if cap_chunk < 0 or k < cap_chunk:
+		return p
+	# The summit keeps its ring ledge and nothing else; above it, empty sky
+	var ring: Array[Dictionary] = []
+	if k == cap_chunk:
+		for s in p.surfaces:
+			if s.kind == ChunkPlanner.Kind.RING:
+				ring.append(s)
+	p.surfaces = ring
+	for key in ["windows", "pickups", "drafts", "npcs", "wires", "streams"]:
+		var none: Array[Dictionary] = []
+		p[key] = none
+	p.summit = true
+	return p
+
+# The tower has grown: the old summit becomes an ordinary chunk
+func set_cap(k: int) -> void:
+	for old in chunks.keys():
+		if cap_chunk >= 0 and old >= cap_chunk:
+			chunks[old].queue_free()
+			chunks.erase(old)
+	cap_chunk = k
+
+func is_hidden(k: int) -> bool:
+	return k * TowerShape.CHUNK_H >= reveal_top
 
 # Keeps chunks around `y` built. Builds the nearest missing chunk each call
 # (or all of them when `immediate`), and frees ones far away.
@@ -48,6 +81,8 @@ func stream(y: float, immediate := false) -> void:
 	wanted.sort_custom(func(a, b): return abs(a - c) < abs(b - c))
 	var built_one := false
 	for k in wanted:
+		if is_hidden(k):
+			continue
 		var ch := chunk(k)
 		if not ch.built and (immediate or not built_one or abs(k - c) <= 1):
 			ch.build()
@@ -73,7 +108,8 @@ func set_glow(g: float) -> void:
 func _surfaces_between(y_lo: float, y_hi: float) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for k in range(TowerShape.chunk_at(y_lo), TowerShape.chunk_at(y_hi) + 1):
-		out.append_array(chunk(k).surfaces)
+		if not is_hidden(k):
+			out.append_array(chunk(k).surfaces)
 	return out
 
 # Highest surface whose top was crossed while falling from prev_y to y
@@ -99,7 +135,7 @@ func ground_below(theta: float, r: float, y: float, max_drop := 24.0) -> float:
 func chunk_of(s: Dictionary) -> TowerChunk:
 	return chunks.get(int(String(s.id).get_slice(":", 0)))
 
-# Types ("feather", "seed", "poison") of the pickups touched this frame.
+# Types ("feather", "plume", "poison") of the pickups touched this frame.
 # Gold feathers are remembered so they never come back this run.
 func collect_pickups(pos: Vector3) -> Array[String]:
 	var got: Array[String] = []
@@ -197,14 +233,15 @@ func wire_crossed(prev: Vector3, now: Vector3) -> Dictionary:
 				return hit
 	return {}
 
-# The boost ring the bird is flying through (or {})
-func ring_hit(pos: Vector3) -> Dictionary:
+# The wind stream close enough to catch the bird: {stream, i} or {}. A
+# stream can climb a couple of chunks above the one it starts in.
+func stream_near(pos: Vector3) -> Dictionary:
 	var c := TowerShape.chunk_at(pos.y)
-	for k in [c, c - 1, c + 1]:
+	for k in [c, c - 1, c - 2, c + 1]:
 		if chunks.has(k):
-			var rg: Dictionary = chunks[k].ring_hit(pos)
-			if not rg.is_empty():
-				return rg
+			var hit: Dictionary = chunks[k].stream_near(pos)
+			if not hit.is_empty():
+				return hit
 	return {}
 
 # Crow's Charm: good pickups nearby drift toward the bird

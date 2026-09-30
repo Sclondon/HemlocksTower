@@ -83,7 +83,18 @@ func setup(d: Dictionary, on: Dictionary) -> void:
 		bubble.position = Vector3(0, 1.5, 0)
 		add_child(bubble)
 
+var chat: SpeechBubble               # a passing remark (BirdTalk), for crows without a line of their own
+
+func say(text: String) -> void:
+	if chat == null:
+		chat = SpeechBubble.new()
+		chat.position = Vector3(0, 1.5, 0)
+		add_child(chat)
+	chat.say(text, 2.6)
+
 func tick(delta: float, player_pos: Vector3) -> void:
+	if chat:
+		chat.tick(delta, false)
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		return
@@ -134,6 +145,8 @@ static func _spot_on(s: Dictionary) -> Vector3:
 
 # A crow animation recoloured: its dark body takes the tint, shaded by the
 # original brightness; the red eye stays
+const TINT_STRENGTH := 0.35          # how far a bird's colours lean toward its tint
+
 static func recoloured(frames: SpriteFrames, tint: Color) -> SpriteFrames:
 	var key := "%s|%s" % [frames.resource_path, tint.to_html()]
 	if _frames.has(key):
@@ -149,8 +162,11 @@ static func recoloured(frames: SpriteFrames, tint: Color) -> SpriteFrames:
 				var c := img.get_pixel(x, y)
 				if c.a < 0.5 or c.r > c.g + 0.3:
 					continue
+				# Only nudge the original art toward the tint: a full recolour washed
+				# every bird out to one flat hue
 				var shade: float = clamp(0.55 + c.get_luminance() * 2.5, 0.4, 1.3)
-				img.set_pixel(x, y, Color(tint.r * shade, tint.g * shade, tint.b * shade, c.a))
+				var dyed := Color(tint.r * shade, tint.g * shade, tint.b * shade, c.a)
+				img.set_pixel(x, y, c.lerp(dyed, TINT_STRENGTH))
 		out.add_frame("default", ImageTexture.create_from_image(img))
 	_frames[key] = out
 	return out

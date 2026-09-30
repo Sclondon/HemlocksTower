@@ -6,6 +6,8 @@ extends Node3D
 
 const VISIBLE_BELOW := 50.0          # metres; above this the meadow sleeps
 const CLOUD_SHADER := preload("res://shaders/clouds.gdshader")
+const MIST_SHADER := preload("res://shaders/mist.gdshader")
+const WISP := preload("res://images/ambient/willOWisp.png")
 
 var fireflies: CPUParticles3D
 var wisps: Array[Sprite3D] = []
@@ -40,8 +42,10 @@ func _ready() -> void:
 	# Will-o'-wisps: pale lights wandering slow loops between the trees
 	for i in 4:
 		var w := Sprite3D.new()
-		w.texture = MeshUtil.blob_texture(16, Color(0.6, 0.9, 1.0))
-		w.pixel_size = 0.07
+		w.texture = WISP        # 6 frames, from 8 Bit Evil Returns
+		w.hframes = 6
+		w.pixel_size = 0.045
+		w.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 		w.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		w.shaded = false
 		w.set_meta("r", rng.randf_range(12.0, 26.0))
@@ -75,20 +79,23 @@ func _ready() -> void:
 	tex.seamless = true
 	tex.noise = noise
 	var m := ShaderMaterial.new()
-	m.shader = CLOUD_SHADER
+	m.shader = MIST_SHADER
 	m.set_shader_parameter("noise_tex", tex)
 	m.set_shader_parameter("color", Color(0.85, 0.9, 0.95, 0.45))
 	m.set_shader_parameter("shade", Color(0.7, 0.75, 0.85, 0.45))
-	m.set_shader_parameter("coverage", 0.5)
-	m.set_shader_parameter("scale", 22.0)
-	m.set_shader_parameter("fade_near", 25.0)
-	m.set_shader_parameter("fade_far", 70.0)
+	# Big, loose drifts rather than a fine even film
+	m.set_shader_parameter("coverage", 0.36)
+	m.set_shader_parameter("scale", 75.0)
+	m.set_shader_parameter("fade_near", 45.0)
+	m.set_shader_parameter("fade_far", 140.0)
+	# (a soft rim round each drift, and a bright line where the mist meets
+	# anything standing in it: see mist.gdshader)
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(160, 160)
+	plane.size = Vector2(320, 320)
 	plane.material = m
 	mist = MeshInstance3D.new()
 	mist.mesh = plane
-	mist.position.y = 0.45
+	mist.position.y = 1.2
 	mist.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mist)
 
@@ -113,6 +120,13 @@ static func _glow_quad(color: Color, size: float) -> QuadMesh:
 
 # `night` is 0 by day, 1 at deep night
 func update(delta: float, focus_y: float, night: float, cam_pos: Vector3) -> void:
+	# The forest is seen from high up too, so dim it whatever the height
+	for m in TowerChunk.forest_materials:
+		m.set_shader_parameter("light", lerp(1.0, 0.38, night))
+	for s in TowerChunk.night_sprites:
+		var lit: Color = (s.get_meta("tint") as Color) * lerp(1.0, 0.38, night)
+		lit.a = 1.0
+		s.modulate = lit
 	visible = focus_y < VISIBLE_BELOW
 	fireflies.emitting = visible
 	if not visible:
@@ -126,6 +140,7 @@ func update(delta: float, focus_y: float, night: float, cam_pos: Vector3) -> voi
 		var r: float = w.get_meta("r") + sin(t * 2.3) * 3.0
 		w.position = Vector3(sin(t) * r, 1.3 + sin(t * 3.1) * 0.6, cos(t * 1.3) * r)
 		w.modulate.a = lerp(0.3, 0.9, night) * (0.7 + 0.3 * sin(time * 2.0 + t * 7.0))
+		w.frame = int(time * 8.0 + w.get_meta("phase") * 3.0) % 6
 	# Eyes only open after dusk, blink, and sometimes aren't where they were
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
