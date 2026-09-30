@@ -123,6 +123,7 @@ func _init() -> void:
 	eye_light.omni_range = 7.0
 	eye_light.light_energy = 1.3
 	eye_light.position = Vector3(0, 2.9, 1.2)
+	eye_light.visible = not Tuning.low_quality     # (phones: the glowing eyes alone; each light costs a pass)
 	parts[6].add_child(eye_light)
 
 func _part(i: int, st: SurfaceTool, mat: Material) -> void:

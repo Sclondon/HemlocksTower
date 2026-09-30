@@ -79,7 +79,9 @@ func _ready() -> void:
 	tex.seamless = true
 	tex.noise = noise
 	var m := ShaderMaterial.new()
-	m.shader = MIST_SHADER
+	# (phones: the plain cloud shader: reading the depth buffer for the
+	# meeting line is costly on phone GPUs)
+	m.shader = CLOUD_SHADER if Tuning.low_quality else MIST_SHADER
 	m.set_shader_parameter("noise_tex", tex)
 	m.set_shader_parameter("color", Color(0.85, 0.9, 0.95, 0.45))
 	m.set_shader_parameter("shade", Color(0.7, 0.75, 0.85, 0.45))

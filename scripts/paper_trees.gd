@@ -185,6 +185,7 @@ static func _branch(st: SurfaceTool, start: Vector3, yaw: float, rise: float, le
 
 # A round tube through `pts`, `radii` thick at each, with tiling bark UVs
 static func _tube(st: SurfaceTool, pts: Array, radii: Array) -> void:
+	var sides := 5 if Tuning.low_quality else SIDES     # (phones: fewer sides, fewer triangles)
 	var rings := []
 	var along := 0.0
 	for i in pts.size():
@@ -196,13 +197,13 @@ static func _tube(st: SurfaceTool, pts: Array, radii: Array) -> void:
 		if i > 0:
 			along += p.distance_to(pts[i - 1])
 		var ring := []
-		for k in SIDES + 1:
-			var a := TAU * k / SIDES
+		for k in sides + 1:
+			var a := TAU * k / sides
 			var out := side * cos(a) + up * sin(a)
-			ring.append([p + out * radii[i], out, Vector2(float(k) / SIDES, -along / 5.0)])
+			ring.append([p + out * radii[i], out, Vector2(float(k) / sides, -along / 5.0)])
 		rings.append(ring)
 	for i in rings.size() - 1:
-		for k in SIDES:
+		for k in sides:
 			var q := [rings[i][k], rings[i + 1][k], rings[i + 1][k + 1], rings[i][k], rings[i + 1][k + 1], rings[i][k + 1]]
 			for v in q:
 				st.set_normal(v[1])
@@ -270,8 +271,9 @@ static func _treeline(ground: Node3D, leaf_mats: Dictionary) -> void:
 		sts[kind] = SurfaceTool.new()
 		sts[kind].begin(Mesh.PRIMITIVE_TRIANGLES)
 	for ring in [[125.0, 80], [150.0, 115], [190.0, 145], [235.0, 175], [280.0, 210], [330.0, 250], [380.0, 290]]:
-		for i in ring[1]:
-			var a: float = TAU * (i + rng.randf_range(-0.45, 0.45)) / ring[1]
+		var count: int = roundi(ring[1] * (0.6 if Tuning.low_quality else 1.0))
+		for i in count:
+			var a: float = TAU * (i + rng.randf_range(-0.45, 0.45)) / count
 			var r: float = ring[0] + rng.randf_range(-18.0, 18.0)
 			var kind: int = Kind.BROAD if rng.randf() < 0.6 else Kind.ASPEN
 			var tex: Texture2D = CANOPIES[kind]

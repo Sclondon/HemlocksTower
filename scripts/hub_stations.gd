@@ -135,6 +135,7 @@ func _build_cauldron(id: String) -> void:
 	light.omni_range = 6.0
 	light.light_energy = 1.3
 	light.position = at + Vector3(0, 2.4, 0)
+	light.visible = not Tuning.low_quality     # (phones: the glowing stew alone)
 	add_child(light)
 	labels[id] = _label(stew.name, at + Vector3(0, 4.0, 0))
 

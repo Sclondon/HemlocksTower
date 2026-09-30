@@ -248,28 +248,46 @@ func set_glow(g: float) -> void:
 
 # --- building ----------------------------------------------------------------
 
+# Building a chunk's meshes is a few milliseconds of work (many more on a
+# phone), so it can be done a piece at a time: build_some() does a little
+# each frame while the chunk is still out of sight above, and build() does
+# it all at once when it's needed right away.
+var _jobs: Array[Callable] = []
+var _started := false
+
 func build() -> void:
+	while not built:
+		build_some(INF)
+
+# Runs build jobs for up to `budget_ms` (at least one); `built` once done
+func build_some(budget_ms := 1.0) -> void:
 	if built:
 		return
-	built = true
-	var shape: int = plan.k
-	var base: float = plan.base
-	var tint := TowerShape.tint(shape)
-	_build_walls(shape, base, tint)
-	for s in surfaces:
-		_build_surface(s, tint)
-	for w in plan.windows:
-		_build_window(shape, w)
-	for pk in pickups:
-		_build_pickup(pk)
-	for d in drafts:
-		_build_draft(d)
-	for n in plan.npcs:
-		_build_npc(n)
-	for w in wires:
-		_build_wire(w)
-	for sm in streams:
-		_build_stream(sm)
+	if not _started:
+		_started = true
+		var shape: int = plan.k
+		var tint := TowerShape.tint(shape)
+		_jobs.append(_build_walls.bind(shape, plan.base, tint))
+		for s in surfaces:
+			_jobs.append(_build_surface.bind(s, tint))
+		for w in plan.windows:
+			_jobs.append(_build_window.bind(shape, w))
+		for pk in pickups:
+			_jobs.append(_build_pickup.bind(pk))
+		for d in drafts:
+			_jobs.append(_build_draft.bind(d))
+		for n in plan.npcs:
+			_jobs.append(_build_npc.bind(n))
+		for w in wires:
+			_jobs.append(_build_wire.bind(w))
+		for sm in streams:
+			_jobs.append(_build_stream.bind(sm))
+	var until := Time.get_ticks_usec() + budget_ms * 1000.0
+	while not _jobs.is_empty():
+		_jobs.pop_front().call()
+		if Time.get_ticks_usec() >= until:
+			break
+	built = _jobs.is_empty()
 
 func _build_walls(shape: int, base: float, tint: Color) -> void:
 	if plan.get("summit", false):
@@ -719,6 +737,8 @@ func _add_feather_glow(holder: Node3D, color: Color) -> void:
 	var pulse := glow.create_tween().set_loops()
 	pulse.tween_property(glow, "modulate:a", 0.25, 0.7).set_trans(Tween.TRANS_SINE)
 	pulse.tween_property(glow, "modulate:a", 0.6, 0.7).set_trans(Tween.TRANS_SINE)
+	if Tuning.low_quality:
+		return                       # (phones: the glow alone, no sparkles)
 	var sparkle := CPUParticles3D.new()
 	sparkle.amount = Tuning.particles(7)
 	sparkle.lifetime = 1.1
@@ -789,23 +809,25 @@ static func make_ground() -> Node3D:
 	# The wood round the hub, out to the horizon, in one smooth spread: over
 	# the ground its density eases off gradually from a thick edge (no step
 	# anywhere), and the far trees grow a little taller, so the canopy closes
-	# up toward the horizon by itself. Fewer on phones. (The pictures and
+	# up toward the horizon by itself. On phones the real trees stop at 180 m
+	# (the horizon tree line of leaf cards carries on past them). (The pictures and
 	# shades are for the flat-sprite forest, PAPER_FOREST off.)
 	# [position, height, texture, shade]
 	var yard := HubStations.DREAM.x
 	var trees: Array = []
-	while trees.size() < Tuning.particles(900):
+	var far := 180.0 if Tuning.low_quality else 340.0
+	while trees.size() < (260 if Tuning.low_quality else 900):
 		var a := rng.randf() * TAU
-		var r: float = sqrt(lerp(44.0 * 44.0, 340.0 * 340.0, rng.randf()))     # even over the ground...
+		var r: float = sqrt(lerp(44.0 * 44.0, far * far, rng.randf()))     # even over the ground...
 		if rng.randf() > (1.0 + 1.5 * exp(-(r - 44.0) / 45.0)) / 2.5:
 			continue                                # ...then thicker toward the edge, easing off
 		var near := r < 70.0
 		var tex: Texture2D = DEAD_TREES[rng.randi_range(0, 2)] if near and rng.randf() < 0.75 else TREES[rng.randi_range(0, TREES.size() - 1)]
-		var h: float = rng.randf_range(14.0, 22.0) * lerp(1.0, 1.35, clamp((r - 150.0) / 190.0, 0.0, 1.0))
+		var h: float = rng.randf_range(14.0, 22.0) * lerp(1.0, 1.35, clamp((r - 150.0) / (far - 150.0), 0.0, 1.0))
 		trees.append([Vector3(sin(a) * r, 0.0, cos(a) * r), h, tex, rng.randf_range(0.62, 0.88)])
 	# ...and a thick band hugging the wood's edge by the meadow, fading off
 	# smoothly outward (a half-bell curve, so there's no step where it ends)
-	for i in 240:
+	for i in (170 if Tuning.low_quality else 240):
 		var a := rng.randf() * TAU
 		var r: float = 44.0 + abs(rng.randfn(0.0, 22.0))
 		var tex: Texture2D = DEAD_TREES[rng.randi_range(0, 2)] if rng.randf() < 0.75 else TREES[rng.randi_range(0, TREES.size() - 1)]

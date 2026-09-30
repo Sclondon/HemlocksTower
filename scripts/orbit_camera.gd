@@ -39,6 +39,8 @@ func snap() -> void:
 func _process(delta: float) -> void:
 	if player == null:
 		return
+	# Where the bird looks to be right now, between physics steps (see Player.shown)
+	var seen := player.shown()
 	var want := DISTANCE
 	if cine:
 		cam_theta += delta * 0.22
@@ -50,21 +52,21 @@ func _process(delta: float) -> void:
 		idle_time += delta
 		cam_theta += delta * 0.09
 		var rise := 16.0 * (0.5 - 0.5 * cos(idle_time * 0.06))
-		cam_y = lerp(cam_y, player.y + 3.0 + rise, 1.0 - exp(-1.5 * delta))
+		cam_y = lerp(cam_y, seen.z + 3.0 + rise, 1.0 - exp(-1.5 * delta))
 		want = IDLE_DISTANCE
 	else:
-		var goal := player.theta
-		var target := player.y + (1.5 if player.vy > -10.0 else -2.5)   # further ahead down in a long fall
+		var goal := seen.x
+		var target := seen.z + (1.5 if player.vy > -10.0 else -2.5)   # further ahead down in a long fall
 		if watch and watch.is_visible_in_tree():
 			# Turn part way toward the boss and pull back, so both are in shot
 			var w := watch.global_position
-			goal += wrapf(atan2(w.x, w.z) - player.theta, -PI, PI) * 0.5
+			goal += wrapf(atan2(w.x, w.z) - seen.x, -PI, PI) * 0.5
 			target = lerp(target, w.y + 3.0, 0.3)
 			want = DISTANCE * 1.6
 		cam_theta += wrapf(goal - cam_theta, -PI, PI) * (1.0 - exp(-5.0 * delta))
 		var rate := 4.0 if target > cam_y else 7.0
 		cam_y = lerp(cam_y, target, 1.0 - exp(-rate * delta))
-		cam_r = lerp(cam_r, max(player.r, 5.0), 1.0 - exp(-3.0 * delta))
+		cam_r = lerp(cam_r, max(seen.y, 5.0), 1.0 - exp(-3.0 * delta))
 	# Tip the view a little the way the bird is heading (not in cutscenes / menus)
 	var lean: float = 0.0 if cine or orbit_idle else clamp(player.vy / 12.0, -1.0, 1.0) * TILT_MAX
 	tilt = lerp(tilt, lean, 1.0 - exp(-2.5 * delta))

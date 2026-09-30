@@ -6,6 +6,7 @@ extends Node3D
 const KEEP_BELOW := 2                # chunks built below the focus
 const KEEP_ABOVE := 3
 const UNLOAD_MARGIN := 2
+const BUILD_SLICE_MS := 1.0          # time spent building chunks ahead, per frame
 
 var run_seed := 0
 var chunks := {}                     # chunk index -> TowerChunk
@@ -71,23 +72,31 @@ func set_cap(k: int) -> void:
 func is_hidden(k: int) -> bool:
 	return k * TowerShape.CHUNK_H >= reveal_top
 
-# Keeps chunks around `y` built. Builds the nearest missing chunk each call
-# (or all of them when `immediate`), and frees ones far away.
+# Keeps chunks around `y` built (all at once when `immediate`), and frees
+# ones far away.
 func stream(y: float, immediate := false) -> void:
 	var c := TowerShape.chunk_at(y)
 	var wanted: Array[int] = []
 	for k in range(max(0, c - KEEP_BELOW), c + KEEP_ABOVE + 1):
 		wanted.append(k)
 	wanted.sort_custom(func(a, b): return abs(a - c) < abs(b - c))
-	var built_one := false
+	# The chunk the bird is in and its neighbours are built at once if they
+	# must be; ones further off get a slice of building each frame (the
+	# nearest first), so climbing into new territory never hitches
+	var worked := false
 	for k in wanted:
 		if is_hidden(k):
 			continue
 		var ch := chunk(k)
-		if not ch.built and (immediate or not built_one or abs(k - c) <= 1):
+		if ch.built:
+			continue
+		if immediate or abs(k - c) <= 1:
 			ch.build()
+		elif not worked:
+			ch.build_some(BUILD_SLICE_MS)
+			worked = true
+		if ch.built:
 			ch.set_glow(glow)
-			built_one = true
 	for k in chunks.keys():
 		if k < c - KEEP_BELOW - UNLOAD_MARGIN or k > c + KEEP_ABOVE + UNLOAD_MARGIN:
 			chunks[k].queue_free()

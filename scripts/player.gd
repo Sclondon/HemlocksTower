@@ -135,6 +135,21 @@ func place(t: float, radius: float, height: float) -> void:
 	var s := tower.find_landing(height + 0.5, height - 0.5, theta, r)
 	if not s.is_empty():
 		_land(s, false)
+	_prev = Vector3(theta, r, y)       # (no smoothing across a teleport)
+
+# Physics moves the bird 60 times a second, but screens refresh at 90 or
+# 120 Hz too: drawn straight from the physics it would judder. So it's drawn
+# (and the camera follows it) part way between the last two physics steps.
+var _prev := Vector3.ZERO            # (theta, r, y) at the start of this physics step
+
+# (theta, r, y) as it should look right now
+func shown() -> Vector3:
+	var f := Engine.get_physics_interpolation_fraction()
+	return Vector3(lerp_angle(_prev.x, theta, f), lerp(_prev.y, r, f), lerp(_prev.z, y, f))
+
+func shown_position() -> Vector3:
+	var s := shown()
+	return Vector3(sin(s.x) * s.y, s.z, cos(s.x) * s.y)
 
 func world_position() -> Vector3:
 	return Vector3(sin(theta) * r, y, cos(theta) * r)
@@ -142,6 +157,7 @@ func world_position() -> Vector3:
 func _physics_process(delta: float) -> void:
 	if tower == null:
 		return
+	_prev = Vector3(theta, r, y)
 	var shape := TowerShape.chunk_at(y + 0.05)
 
 	var ax := 0.0
@@ -361,7 +377,7 @@ func _land(s: Dictionary, emit: bool) -> void:
 		landed.emit(fall)
 
 func _process(delta: float) -> void:
-	position = world_position()
+	position = shown_position()
 	flap_anim = max(flap_anim - delta, 0.0)
 	var frames: SpriteFrames
 	# Near the top of a jump the bird flaps frantically, struggling to stay up
@@ -437,7 +453,8 @@ func _process(delta: float) -> void:
 	var floor_y := tower.ground_below(theta, r, y, 40.0) if tower else -INF
 	shadow.visible = floor_y > -INF
 	if shadow.visible:
-		shadow.global_position = Vector3(sin(theta) * r, floor_y + 0.03, cos(theta) * r)
+		var at := shown_position()
+		shadow.global_position = Vector3(at.x, floor_y + 0.03, at.z)
 		var s: float = clamp(1.0 - (y - floor_y) / 16.0, 0.55, 1.0)
 		shadow.scale = Vector3.ONE * s
 
